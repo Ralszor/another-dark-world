@@ -11,7 +11,7 @@ function character:init()
     self.title = "Gunslinger\nhates the\nbelch.plorgius"
 
     self.soul_priority = 1
-    self.soul_color = {1, 106/255, 0}
+    self.soul_color = {253/255, 199/255, 72/255}
     self.soul_facing = "up"
     
     self.has_spells = true
