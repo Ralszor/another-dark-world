@@ -46,12 +46,19 @@ function Mod:isLocalPartyHost()
 end
 
 function Mod:isPartyHostPacket(player, uuid)
+    uuid = tostring(uuid or player and player.uuid or "")
+    if self.party_host_uuid
+        and uuid ~= ""
+        and uuid == tostring(self.party_host_uuid)
+    then
+        return true
+    end
+
     if tonumber(player and player.party_number) == 1 then
         return true
     end
 
     local gcsn = rawget(_G, "GCSN")
-    uuid = tostring(uuid or player and player.uuid or "")
     if not gcsn or uuid == "" then return false end
 
     local sources = {
@@ -79,13 +86,16 @@ function Mod:isPartyHostPacket(player, uuid)
     return gcsn.party_members[uuid] ~= nil
 end
 
-function Mod:syncNextBattleFlag(force)
+function Mod:syncNextBattleFlag(force, leader_override)
     self.next_battle_sync_timer = (self.next_battle_sync_timer or 0) + DT
     if not force and self.next_battle_sync_timer < 0.5 then return end
     self.next_battle_sync_timer = 0
 
     local gcsn = rawget(_G, "GCSN")
-    if not gcsn or not gcsn.sendToServer or not self:isLocalPartyHost() then
+    local is_host = leader_override
+        or self.party_host_is_local
+        or self:isLocalPartyHost()
+    if not gcsn or not gcsn.sendToServer or not is_host then
         return
     end
 
@@ -321,6 +331,10 @@ function Mod:installNetworkHook()
                     "^%[anotherdoor_card_deal%]%s+(%S+)%s+(%d+)%s+(%d+)%s+(%d+)%s+(%d+)$"
                 )
                 if encounter then
+                    local gcsn = rawget(_G, "GCSN")
+                    Mod.party_host_uuid = data.uuid
+                    Mod.party_host_is_local = gcsn
+                        and tostring(data.uuid or "") == tostring(gcsn.uuid or "")
                     if Game.battle and Game.battle.receiveCardDeal then
                         Game.battle:receiveCardDeal({
                             uuid = data.uuid,

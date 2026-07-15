@@ -263,6 +263,13 @@ end
 function Battle:returnToWorld()
     local advance_phase = not self.phase_queue_advanced
     local leader = self:getCardDealLeader()
+    local gcsn = rawget(_G, "GCSN")
+    if leader then
+        Mod.party_host_is_local = leader.local_player
+        Mod.party_host_uuid = leader.local_player
+            and gcsn and gcsn.uuid
+            or leader.uuid
+    end
     local can_advance_queue = not self:isCardPartyOnline()
         or (leader and leader.local_player)
         or (not leader and Mod:getLocalPartyNumber() == 1)
@@ -270,6 +277,9 @@ function Battle:returnToWorld()
     super.returnToWorld(self)
     if advance_phase and can_advance_queue then
         Mod:advancePhaseQueue()
+        if gcsn then
+            Mod:syncNextBattleFlag(true, true)
+        end
     end
 end
 
@@ -610,6 +620,8 @@ function Battle:sendCardDeal()
     if not gcsn or not gcsn.sendToServer or not leader or not leader.local_player then
         return
     end
+    Mod.party_host_uuid = gcsn.uuid
+    Mod.party_host_is_local = true
     gcsn.sendToServer({
         command = "chat",
         uuid = gcsn.uuid,
@@ -731,6 +743,9 @@ function Battle:receiveCardDeal(data)
     if not sent_by_host then
         return
     end
+
+    Mod.party_host_uuid = data.uuid
+    Mod.party_host_is_local = false
 
     if tonumber(data.battle_seed) then
         self.card_battle_seed = math.max(
