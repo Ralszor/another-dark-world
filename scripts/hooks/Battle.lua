@@ -261,9 +261,13 @@ end
 
 function Battle:returnToWorld()
     local advance_phase = not self.phase_queue_advanced
+    local leader = self:getCardDealLeader()
+    local can_advance_queue = not self:isCardPartyOnline()
+        or (leader and leader.local_player)
+        or (not leader and Mod:getLocalPartyNumber() == 1)
     self.phase_queue_advanced = true
     super.returnToWorld(self)
-    if advance_phase then
+    if advance_phase and can_advance_queue then
         Mod:advancePhaseQueue()
     end
 end
@@ -600,23 +604,11 @@ function Battle:getCardPools()
 end
 
 function Battle:sendCardDeal()
-    local gcsn = rawget(_G, "GCSN")
     local leader = self:getCardDealLeader()
-    if not gcsn or not gcsn.sendToServer or not leader or not leader.local_player then
+    if not leader or not leader.local_player then
         return
     end
-
-    gcsn.sendToServer({
-        command = "chat",
-        uuid = gcsn.uuid,
-        message = table.concat({
-            "[anotherdoor_card_deal]",
-            tostring(self.encounter and self.encounter.id or "battle"),
-            tostring(self.card_round),
-            tostring(self.card_deal_seed),
-            tostring(self.card_phase_total),
-        }, " "),
-    })
+    self:sendCardSelection(self.card_selections.__local)
 end
 
 function Battle:dealCards(amount, seed)
@@ -727,46 +719,24 @@ function Battle:receiveCardDeal(data)
         return
     end
 
+    if tonumber(data.battle_seed) then
+        self.card_battle_seed = math.max(
+            1,
+            math.floor(tonumber(data.battle_seed)) % 2147483647
+        )
+        local next_battle = Mod:setNextBattleSeed(self.card_battle_seed)
+        self.card_phase_rarities = next_battle.phases
+        self.card_phase_total = #next_battle.phases
+    elseif tonumber(data.total) then
+        self.card_phase_total = math.max(1, math.floor(tonumber(data.total)))
+    end
+
     local seed = math.max(1, math.floor(tonumber(data.seed)) % 2147483647)
     self:beginCardDecisionPhase(seed)
 end
 
-function Battle:sendCardChoice(choice)
-    local gcsn = rawget(_G, "GCSN")
-    if not gcsn or not gcsn.sendToServer or not choice then
-        return
-    end
-
-    gcsn.sendToServer({
-        command = "chat",
-        uuid = gcsn.uuid,
-        message = table.concat({
-            "[anotherdoor_card_choice]",
-            tostring(self.encounter and self.encounter.id or "battle"),
-            tostring(self.card_round),
-            tostring(choice),
-        }, " "),
-    })
-end
-
 function Battle:sendTensionState()
-    local gcsn = rawget(_G, "GCSN")
-    local player = self.party[1]
-    local tension = player and player.chara and player.chara.tension
-    if not gcsn or not gcsn.sendToServer or not tension then
-        return
-    end
-
-    gcsn.sendToServer({
-        command = "chat",
-        uuid = gcsn.uuid,
-        message = table.concat({
-            "[anotherdoor_tension]",
-            tostring(self.encounter and self.encounter.id or "battle"),
-            tostring(tension.value or 0),
-            tostring(tension.max or 100),
-        }, " "),
-    })
+    self:sendCardSelection(self.card_selections.__local)
 end
 
 function Battle:receiveTensionState(data)
@@ -796,6 +766,7 @@ function Battle:sendCardSelection(choice)
         return
     end
 
+    local tension = player.chara and player.chara.tension
     gcsn.sendToServer({
         command = "battle",
         subCommand = "update",
@@ -808,11 +779,13 @@ function Battle:sendCardSelection(choice)
         location = {player.x, player.y},
         party_number = player.party_number,
         anotherdoor_card_round = self.card_round,
+        anotherdoor_battle_seed = self.card_battle_seed,
         anotherdoor_card_seed = self.card_deal_seed,
+        anotherdoor_card_total = self.card_phase_total,
         anotherdoor_card_choice = choice,
+        anotherdoor_tension_value = tension and tension.value,
+        anotherdoor_tension_max = tension and tension.max,
     })
-
-    self:sendCardChoice(choice)
 end
 
 function Battle:selectCard(choice)
@@ -998,14 +971,7 @@ function Battle:updateCardSync()
     end
     self.card_sync_timer = 0
 
-    local leader = self:getCardDealLeader()
-    if self.card_deal_seed and leader and leader.local_player then
-        self:sendCardDeal()
-    end
-    if self.card_selections.__local then
-        self:sendCardChoice(self.card_selections.__local)
-    end
-    self:sendTensionState()
+    self:sendCardSelection(self.card_selections.__local)
 end
 
 function Battle:spawnDoorDamageNumber(member, index, amount, healing)
