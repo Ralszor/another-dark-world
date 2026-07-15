@@ -18,6 +18,15 @@ local SEED_MODULUS = 2147483647
 local SEED_MULTIPLIER = 48271
 
 function Mod:getLocalPartyNumber()
+    local gcsn = rawget(_G, "GCSN")
+    if gcsn and tonumber(gcsn.party_number) then
+        return tonumber(gcsn.party_number)
+    end
+    local known = gcsn and gcsn.known_players and gcsn.known_players[gcsn.uuid]
+    if known and tonumber(known.party_number) then
+        return tonumber(known.party_number)
+    end
+
     local battler = Game and Game.battle and Game.battle.party
         and Game.battle.party[1]
     if battler and tonumber(battler.party_number) then
@@ -268,10 +277,10 @@ end
 
 function Mod:installNetworkHook()
     local gcsn = rawget(_G, "GCSN")
-    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_sync_hook_v2 then
+    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_sync_hook_v3 then
         return
     end
-    gcsn._anotherdoor_sync_hook_v2 = true
+    gcsn._anotherdoor_sync_hook_v3 = true
 
     Utils.hook(gcsn, "sendToServer", function(orig, message, ...)
         if type(message) == "table"
@@ -307,12 +316,61 @@ function Mod:installNetworkHook()
     Utils.hook(gcsn, "parseServerData", function(orig, network, data, ...)
         if type(data) == "table" then
             if data.command == "chat" then
-                local seed = tostring(data.message or ""):match(
+                local message = tostring(data.message or "")
+                local encounter, round, seed, total, battle_seed = message:match(
+                    "^%[anotherdoor_card_deal%]%s+(%S+)%s+(%d+)%s+(%d+)%s+(%d+)%s+(%d+)$"
+                )
+                if encounter then
+                    if Game.battle and Game.battle.receiveCardDeal then
+                        Game.battle:receiveCardDeal({
+                            uuid = data.uuid,
+                            party_number = 1,
+                            encounter = encounter,
+                            round = round,
+                            seed = seed,
+                            total = total,
+                            battle_seed = battle_seed,
+                        })
+                    end
+                    return
+                end
+
+                local choice_encounter, choice_round, choice = message:match(
+                    "^%[anotherdoor_card_choice%]%s+(%S+)%s+(%d+)%s+(%d+)$"
+                )
+                if choice_encounter then
+                    if Game.battle and Game.battle.receiveCardSelection then
+                        Game.battle:receiveCardSelection({
+                            uuid = data.uuid,
+                            encounter = choice_encounter,
+                            round = choice_round,
+                            choice = choice,
+                        })
+                    end
+                    return
+                end
+
+                local tension_encounter, tension_value, tension_max = message:match(
+                    "^%[anotherdoor_tension%]%s+(%S+)%s+([%d%.%-]+)%s+([%d%.%-]+)$"
+                )
+                if tension_encounter then
+                    if Game.battle and Game.battle.receiveTensionState then
+                        Game.battle:receiveTensionState({
+                            uuid = data.uuid,
+                            encounter = tension_encounter,
+                            value = tension_value,
+                            max = tension_max,
+                        })
+                    end
+                    return
+                end
+
+                local next_seed = message:match(
                     "^%[anotherdoor_next_battle%]%s+(%d+)$"
                 )
-                if seed then
+                if next_seed then
                     if Mod:isPartyHostPacket(data, data.uuid) then
-                        Mod:setNextBattleSeed(seed)
+                        Mod:setNextBattleSeed(next_seed)
                     end
                     -- Control messages are never forwarded to GCSN's chat UI.
                     return

@@ -153,6 +153,7 @@ end
 
 function Battle:init()
     super.init(self)
+    Mod:installNetworkHook()
 
     -- This is deliberately separate from Battle.party. GCSN's Other_Battler is a
     -- Character, not a PartyBattler, and the stock battle logic cannot operate on it.
@@ -604,11 +605,23 @@ function Battle:getCardPools()
 end
 
 function Battle:sendCardDeal()
+    local gcsn = rawget(_G, "GCSN")
     local leader = self:getCardDealLeader()
-    if not leader or not leader.local_player then
+    if not gcsn or not gcsn.sendToServer or not leader or not leader.local_player then
         return
     end
-    self:sendCardSelection(self.card_selections.__local)
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_card_deal]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(self.card_round),
+            tostring(self.card_deal_seed),
+            tostring(self.card_phase_total),
+            tostring(self.card_battle_seed),
+        }, " "),
+    })
 end
 
 function Battle:dealCards(amount, seed)
@@ -735,8 +748,36 @@ function Battle:receiveCardDeal(data)
     self:beginCardDecisionPhase(seed)
 end
 
+function Battle:sendCardChoice(choice)
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer or not choice then return end
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_card_choice]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(self.card_round),
+            tostring(choice),
+        }, " "),
+    })
+end
+
 function Battle:sendTensionState()
-    self:sendCardSelection(self.card_selections.__local)
+    local gcsn = rawget(_G, "GCSN")
+    local player = self.party[1]
+    local tension = player and player.chara and player.chara.tension
+    if not gcsn or not gcsn.sendToServer or not tension then return end
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_tension]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(tension.value or 0),
+            tostring(tension.max or 100),
+        }, " "),
+    })
 end
 
 function Battle:receiveTensionState(data)
@@ -786,6 +827,7 @@ function Battle:sendCardSelection(choice)
         anotherdoor_tension_value = tension and tension.value,
         anotherdoor_tension_max = tension and tension.max,
     })
+    self:sendCardChoice(choice)
 end
 
 function Battle:selectCard(choice)
@@ -971,7 +1013,14 @@ function Battle:updateCardSync()
     end
     self.card_sync_timer = 0
 
-    self:sendCardSelection(self.card_selections.__local)
+    local leader = self:getCardDealLeader()
+    if self.card_deal_seed and leader and leader.local_player then
+        self:sendCardDeal()
+    end
+    if self.card_selections.__local then
+        self:sendCardChoice(self.card_selections.__local)
+    end
+    self:sendTensionState()
 end
 
 function Battle:spawnDoorDamageNumber(member, index, amount, healing)
