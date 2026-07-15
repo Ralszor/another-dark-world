@@ -8,10 +8,10 @@ function character:init()
     self:setActor("mason")
 
     self.level = 1
-    self.title = "Gunslinger\nhates the\nbelch.plorgius"
+    self.title = "Gunslinger\nHates the\nbelch.plorgius"
 
     self.soul_priority = 1
-    self.soul_color = {1, 106/255, 0}
+    self.soul_color = {253/255, 199/255, 72/255}
     self.soul_facing = "up"
     
     self.has_spells = true
@@ -28,7 +28,7 @@ function character:init()
         health = 100,
         attack = 10,
         defense = 2,
-        magic = 3,
+        magic = 0,
         mana = 30
     }
 
@@ -80,25 +80,24 @@ end
 
 function character:drawPowerStat(index, x, y, menu)
     if index == 1  then
-        local icon = Assets.getTexture("ui/menu/icon/demon")
+        local icon = Assets.getTexture("ui/menu/icon/exclamation")
         love.graphics.draw(icon, x-26, y+6, 0, 2, 2)
-        love.graphics.print("Skills", x, y, 0, 0.7, 1)
-        love.graphics.print("Yes", x+130, y)
+        love.graphics.print("Howdy:", x, y)
+        love.graphics.print("What", x+130, y)
         return true
     elseif index == 2 then
-        local icon = Assets.getTexture("ui/menu/icon/magic")
+        local icon = Assets.getTexture("ui/menu/icon/smile_dog")
         love.graphics.draw(icon, x-26, y+6, 0, 2, 2)
-        love.graphics.print("Father", x, y)
-        love.graphics.print("Yes", x+130, y, 0)
+        love.graphics.print("Plorgius:", x, y)
+        love.graphics.print("NO", x+130, y, 0)
         return true
     elseif index == 3 then
-        local icon = Assets.getTexture("ui/menu/icon/fire")
+        local icon = Assets.getTexture("ui/menu/icon/cowboy_hat")
         love.graphics.draw(icon, x-26, y+6, 0, 2, 2)
-        love.graphics.print("Guts:", x, y)
+        love.graphics.print("Justice:", x, y)
 
-        love.graphics.draw(icon, x+90, y+6, 0, 2, 2)
-        love.graphics.print("x", x+111, y)
-        love.graphics.print("∞", x+122, y+3)
+        local infinity = Assets.getTexture("ui/menu/icon/infinite")
+        love.graphics.draw(infinity, x+129, y + 10, 0, 2, 2)
 
         return true
     end
@@ -106,14 +105,9 @@ end
 
 function character:getGameOverMessage(main)
     return {
-        "Hey, I believe we\ncan do this.",
-        main:getName()..",[wait:5]\nlet's try again!"
+        "Hey, c'mon,\nget up!",
+        main:getName()..",[wait:5]\nyou've got this!"
     }
-end
-
-function character:autoHealSwoonAmount()
-    return 1
-    -- If needed, I'll safeguard this, but I don't see that as necessary.
 end
 
 return character
