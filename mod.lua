@@ -56,7 +56,35 @@ function Mod:isPartyHostPacket(player, uuid)
             return true
         end
     end
-    return false
+
+    -- Party-number metadata can arrive a packet later than chat. If no host is
+    -- known yet, accept the control packet from a current party member; only
+    -- the local host is allowed to send this packet below.
+    for _, source in ipairs(sources) do
+        for _, known in pairs(source or {}) do
+            if tonumber(known.party_number) == 1 then
+                return false
+            end
+        end
+    end
+    return gcsn.party_members[uuid] ~= nil
+end
+
+function Mod:syncNextBattleFlag(force)
+    self.next_battle_sync_timer = (self.next_battle_sync_timer or 0) + DT
+    if not force and self.next_battle_sync_timer < 0.5 then return end
+    self.next_battle_sync_timer = 0
+
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer or not self:isLocalPartyHost() then
+        return
+    end
+
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = "[anotherdoor_next_battle] " .. tostring(self:getNextBattle().seed),
+    })
 end
 
 function Mod:normalizeRarity(rarity)
@@ -240,10 +268,10 @@ end
 
 function Mod:installNetworkHook()
     local gcsn = rawget(_G, "GCSN")
-    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_sync_hook then
+    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_sync_hook_v2 then
         return
     end
-    gcsn._anotherdoor_sync_hook = true
+    gcsn._anotherdoor_sync_hook_v2 = true
 
     Utils.hook(gcsn, "sendToServer", function(orig, message, ...)
         if type(message) == "table"
@@ -278,6 +306,19 @@ function Mod:installNetworkHook()
 
     Utils.hook(gcsn, "parseServerData", function(orig, network, data, ...)
         if type(data) == "table" then
+            if data.command == "chat" then
+                local seed = tostring(data.message or ""):match(
+                    "^%[anotherdoor_next_battle%]%s+(%d+)$"
+                )
+                if seed then
+                    if Mod:isPartyHostPacket(data, data.uuid) then
+                        Mod:setNextBattleSeed(seed)
+                    end
+                    -- Control messages are never forwarded to GCSN's chat UI.
+                    return
+                end
+            end
+
             Mod:processNetworkPlayer(data, data.uuid)
             if type(data.players) == "table" then
                 for key, player in pairs(data.players) do

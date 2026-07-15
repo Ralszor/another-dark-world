@@ -5,6 +5,8 @@ function nextscreen:init(x, y, shape)
     super.init(self, x, y, shape)
     self.phase_sprites = {}
     self.phase_signature = nil
+    Mod:installNetworkHook()
+    Mod:syncNextBattleFlag(true)
     self:refreshPhases()
 end
 
@@ -45,6 +47,8 @@ end
 
 function nextscreen:update()
     super.update(self)
+    Mod:installNetworkHook()
+    Mod:syncNextBattleFlag()
     local signature = table.concat(Mod:getPhaseQueue(), ":")
     if signature ~= self.phase_signature then
         self:refreshPhases()
