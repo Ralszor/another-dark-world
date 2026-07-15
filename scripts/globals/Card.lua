@@ -18,6 +18,10 @@ function Card:onDecisionPhase(battle)
     self.revealed = true
 end
 
+---Called when the local player commits to this card.
+function Card:onSelected(battle)
+end
+
 function Card:getName()
     return self.revealed and self.name or "???"
 end

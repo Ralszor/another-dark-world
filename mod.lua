@@ -1,137 +1,160 @@
-local function installCardSelectionHook()
-    local gcsn = rawget(_G, "GCSN")
-    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_card_hook then
-        return
+local PHASE_WEIGHTS = {
+    {rarity = "common", weight = 80},
+    {rarity = "uncommon", weight = 10},
+    {rarity = "rare", weight = 5},
+    {rarity = "event", weight = 5},
+}
+
+local VALID_RARITIES = {
+    common = true,
+    uncommon = true,
+    rare = true,
+    event = true,
+}
+
+local NEXT_BATTLE_FLAG = "another_door_next_battle"
+local MAX_PHASES = 6
+local SEED_MODULUS = 2147483647
+local SEED_MULTIPLIER = 48271
+
+function Mod:normalizeRarity(rarity)
+    rarity = tostring(rarity or "common"):lower()
+    if rarity == "events" then rarity = "event" end
+    return VALID_RARITIES[rarity] and rarity or "common"
+end
+
+function Mod:rollPhaseRarity()
+    return self:getRarityForRoll(love.math.random(1, 100))
+end
+
+function Mod:getRarityForRoll(roll)
+    local total = 0
+    for _, entry in ipairs(PHASE_WEIGHTS) do
+        total = total + entry.weight
+        if roll <= total then return entry.rarity end
+    end
+    return "common"
+end
+
+function Mod:generateNextBattle()
+    local seed = love.math.random(1, SEED_MODULUS - 1)
+    local phase_count = (seed % MAX_PHASES) + 1
+    local phases = {}
+    local phase_seed = seed
+    for index = 1, phase_count do
+        phase_seed = (phase_seed * SEED_MULTIPLIER) % SEED_MODULUS
+        phases[index] = self:getRarityForRoll((phase_seed % 100) + 1)
     end
 
-    gcsn._anotherdoor_card_hook = true
-    Utils.hook(gcsn, "sendToServer", function(orig, message, ...)
-        if type(message) == "table"
-            and message.command == "battle"
-            and message.subCommand == "update"
-            and Game.battle
-            and Game.battle.card_selections
-        then
-            message.anotherdoor_card_round = Game.battle.card_round
-            message.anotherdoor_card_seed = Game.battle.card_deal_seed
-            if Game.battle.card_selections.__local then
-                message.anotherdoor_card_choice = Game.battle.card_selections.__local
+    local next_battle = {seed = seed, phases = phases}
+    Game:setFlag(NEXT_BATTLE_FLAG, next_battle)
+    return next_battle
+end
+
+function Mod:getNextBattle()
+    local next_battle = Game:getFlag(NEXT_BATTLE_FLAG)
+    if type(next_battle) == "table"
+        and type(next_battle.seed) == "number"
+        and type(next_battle.phases) == "table"
+        and #next_battle.phases == ((next_battle.seed % MAX_PHASES) + 1)
+    then
+        for _, rarity in ipairs(next_battle.phases) do
+            if not VALID_RARITIES[rarity] then
+                return self:generateNextBattle()
             end
         end
-        return orig(message, ...)
-    end)
+        return next_battle
+    end
+    return self:generateNextBattle()
+end
 
-    Utils.hook(gcsn, "parseServerData", function(orig, network, data, ...)
-        if type(data) == "table" and data.command == "chat" then
-            local message = tostring(data.message or "")
-            local encounter, round, seed = message:match(
-                "^%[anotherdoor_card_deal%]%s+(%S+)%s+(%d+)%s+(%d+)%s+%d+$"
-            )
-            if encounter then
-                if Game.battle and Game.battle.receiveCardDeal then
-                    Game.battle:receiveCardDeal({
-                        uuid = data.uuid,
-                        party_number = 1,
-                        encounter = encounter,
-                        round = round,
-                        seed = seed,
-                    })
-                end
-                return
-            end
+function Mod:getPhaseQueue()
+    return self:getNextBattle().phases
+end
 
-            local choice_encounter, choice_round, choice = message:match(
-                "^%[anotherdoor_card_choice%]%s+(%S+)%s+(%d+)%s+(%d+)$"
-            )
-            if choice_encounter then
-                if Game.battle and Game.battle.receiveCardSelection then
-                    Game.battle:receiveCardSelection({
-                        uuid = data.uuid,
-                        encounter = choice_encounter,
-                        round = choice_round,
-                        choice = choice,
-                    })
-                end
-                return
-            end
+function Mod:advancePhaseQueue()
+    return self:generateNextBattle().phases
+end
 
-            local tension_encounter, tension_value, tension_max = message:match(
-                "^%[anotherdoor_tension%]%s+(%S+)%s+([%d%.%-]+)%s+([%d%.%-]+)$"
-            )
-            if tension_encounter then
-                if Game.battle and Game.battle.receiveTensionState then
-                    Game.battle:receiveTensionState({
-                        uuid = data.uuid,
-                        encounter = tension_encounter,
-                        value = tension_value,
-                        max = tension_max,
-                    })
-                end
-                return
+function Mod:getPhaseSeed(battle_seed, round)
+    local seed = math.max(1, math.floor(tonumber(battle_seed) or 1) % SEED_MODULUS)
+    for _ = 1, math.max(1, tonumber(round) or 1) do
+        seed = (seed * SEED_MULTIPLIER) % SEED_MODULUS
+    end
+    return seed
+end
+
+function Mod:getEnemyPools()
+    if self.enemy_pools then return self.enemy_pools end
+
+    local pools = {common = {}, uncommon = {}, rare = {}, event = {}}
+    for path in pairs(self.info.script_chunks or {}) do
+        local id = path:match("^scripts/battle/enemies/(.+)$")
+        if id and Registry.getEnemy(id) then
+            local success, enemy = pcall(Registry.createEnemy, id)
+            if success and enemy then
+                local rarity = self:normalizeRarity(enemy.rarity)
+                table.insert(pools[rarity], id)
             end
         end
+    end
+    for _, pool in pairs(pools) do table.sort(pool) end
+    self.enemy_pools = pools
+    return pools
+end
 
-        if type(data) == "table"
-            and data.command == "battle"
-            and data.subCommand == "anotherdoor_card_choice"
-        then
-            if Game.battle and Game.battle.receiveCardSelection then
-                local selections = data.players or {data}
-                for _, selection in ipairs(selections) do
-                    Game.battle:receiveCardSelection(selection)
-                end
-            end
-            return
+function Mod:pickEnemyForRarity(rarity, fallback, seed)
+    rarity = self:normalizeRarity(rarity)
+    local pools = self:getEnemyPools()
+    local pool = pools[rarity]
+
+    if not pool or #pool == 0 then
+        if not self.warned_empty_enemy_pools then self.warned_empty_enemy_pools = {} end
+        if not self.warned_empty_enemy_pools[rarity] then
+            self.warned_empty_enemy_pools[rarity] = true
+            Kristal.Console:warn("No "..rarity.." enemies are defined; using the common pool.")
         end
+        pool = pools.common
+    end
 
-        if type(data) == "table"
-            and (data.command == "battle" or data.command == "battle_update")
-            and (data.subCommand == "update" or data.command == "battle_update")
-            and Game.battle
-            and Game.battle.receiveCardSelection
-        then
-            local players = data.players or {data}
-            for _, player in ipairs(players) do
-                if player.anotherdoor_card_seed and Game.battle.receiveCardDeal then
-                    Game.battle:receiveCardDeal({
-                        uuid = player.uuid,
-                        party_number = player.party_number,
-                        encounter = player.encounter,
-                        round = player.anotherdoor_card_round,
-                        seed = player.anotherdoor_card_seed,
-                    })
-                end
-                if player.anotherdoor_card_choice then
-                    Game.battle:receiveCardSelection({
-                        uuid = player.uuid,
-                        encounter = player.encounter,
-                        round = player.anotherdoor_card_round,
-                        choice = player.anotherdoor_card_choice,
-                    })
-                end
-            end
+    if pool and #pool > 0 then
+        local index
+        if seed then
+            index = (math.floor(seed) % #pool) + 1
+        else
+            index = love.math.random(1, #pool)
         end
+        return pool[index]
+    end
+    return fallback
+end
 
-        return orig(network, data, ...)
-    end)
+function Mod:pickEnemyForPhase(index, fallback, next_battle)
+    next_battle = next_battle or self:getNextBattle()
+    index = math.max(1, math.floor(tonumber(index) or 1))
+    local rarity = next_battle.phases[index] or "common"
+    local seed = self:getPhaseSeed(next_battle.seed, index)
+    return self:pickEnemyForRarity(rarity, fallback, seed)
+end
+
+function Mod:pickEnemyForCurrentPhase(fallback)
+    return self:pickEnemyForPhase(1, fallback)
 end
 
 function Mod:init()
-    installCardSelectionHook()
-
-    Game:registerEvent("squeak", function(data)
-        return Squeak(data.x, data.y, {data.width, data.height, data.polygon})
-    end)
     print("Loaded " .. self.info.name .. "!")
-end
 
-function Mod:postInit()
-    installCardSelectionHook()
-end
+    Game:registerEvent("mouseholeentry", function(data)
+        return MouseholeEntry(data.x, data.y, { data.width, data.height })
+    end)
 
-function Mod:unload()
-    local gcsn = rawget(_G, "GCSN")
-    if gcsn then
-        gcsn._anotherdoor_card_hook = nil
-    end
+    Game:registerEvent("nextscreen", function(data)
+        return nextscreen(data.x, data.y, { data.width, data.height })
+    end)
+
+    Game:registerEvent("climbshooter", function(data)
+        -- timer_offset is a custom property! Let's read it here and pass it into our object.
+        -- Same with shoot_speed.
+        return ClimbShooter(data.x, data.y, { data.width, data.height }, data.properties.timer_offset, data.properties.shoot_speed)
+    end)
 end

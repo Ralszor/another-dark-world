@@ -13,8 +13,8 @@ function Dummy:init()
     -- Enables the purple grid battle background
     self.background = true
 
-    -- Add the dummy enemy to the encounter
-    self:addEnemy("guei")
+    -- Draw from the pool matching the first phase shown by Nextscreen.
+    self:addEnemy(Mod:pickEnemyForCurrentPhase("guei"))
 
     --- Uncomment this line to add another!
     --self:addEnemy("dummy")

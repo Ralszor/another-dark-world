@@ -4,6 +4,7 @@ function Guei:init()
     super.init(self)
 
     self.name = "Guei"
+    self.rarity = "rare"
     self:setActor("guei")
     self:setAnimation("idle")
 

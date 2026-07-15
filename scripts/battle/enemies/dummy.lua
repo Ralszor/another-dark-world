@@ -5,6 +5,7 @@ function Dummy:init()
 
     -- Enemy name
     self.name = "Dummy"
+    self.rarity = "common"
     -- Sets the actor, which handles the enemy's sprites (see scripts/data/actors/dummy.lua)
     self:setActor("dummy")
 
@@ -17,15 +18,6 @@ function Dummy:init()
     self.defense = 0
     -- Enemy reward
     self.money = 100
-
-    -- Optional ID-based card pools for battles containing this enemy.
-    -- Two unique normal cards are picked from the first table, and one
-    -- X-Action card is picked from the second. Remove this table to use
-    -- every discovered card ID as the random fallback.
-    self.cards = {
-        {"dummy_hug", "dummy_punch", "test_three", "test_4"},
-        {"walk"},
-    }
 
     -- Mercy given when sparing this enemy before its spareable (20% for basic enemies)
     self.spare_points = 20

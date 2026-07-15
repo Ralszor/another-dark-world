@@ -29,6 +29,17 @@ local CARD_FADE_SPEED = 4
 local ROUND_COMPLETE_TIME = 1.5
 local CARD_SYNC_INTERVAL = 0.5
 local NATIVE_PARTY_Y = 800
+local BITE_FLAG = "anotherdoor_bite_status"
+local BITE_DAMAGE = 100
+
+local function getBiteStacks(value)
+    if value == true then
+        return 1
+    elseif type(value) == "number" then
+        return math.max(0, math.floor(value))
+    end
+    return 0
+end
 
 local function copyColor(color, fallback)
     color = color or fallback or COLORS.white
@@ -157,7 +168,10 @@ function Battle:init()
     self.card_phase = "DEALING"
     self.card_round = 1
     self.card_deal_seed = nil
-    self.card_phase_total = nil
+    local next_battle = Mod:getNextBattle()
+    self.card_battle_seed = next_battle.seed
+    self.card_phase_rarities = next_battle.phases
+    self.card_phase_total = #next_battle.phases
     self.card_phase_current = 0
     self.card_phase_timer = 0
     self.card_enemy_alpha = 0
@@ -216,7 +230,12 @@ function Battle:postInit(state, encounter)
 
     self:keepNativePartyOffscreen()
 
+    self.bite_status = BiteStatus(self, getBiteStacks(Game:getFlag(BITE_FLAG, 0)))
+    self.bite_status.is_door_status = true
+    self:addChild(self.bite_status)
+
     self:positionNetworkEnemies(false)
+    self:triggerBiteForEnemy(self.enemies[1])
     self:setState("NONE", "CARD_GAME")
 
     if self.encounter.music and not self.music:isPlaying() then
@@ -240,6 +259,15 @@ function Battle:onRemove(parent)
     super.onRemove(self, parent)
 end
 
+function Battle:returnToWorld()
+    local advance_phase = not self.phase_queue_advanced
+    self.phase_queue_advanced = true
+    super.returnToWorld(self)
+    if advance_phase then
+        Mod:advancePhaseQueue()
+    end
+end
+
 function Battle:positionNetworkEnemies(transitioning)
     local count = #self.enemies
     local columns = math.min(count, 2)
@@ -257,6 +285,90 @@ function Battle:positionNetworkEnemies(transitioning)
             enemy:setPosition(x, y)
         end
     end
+end
+
+function Battle:replacePhaseEnemy(phase_index)
+    local old_enemies = TableUtils.copy(self.enemies)
+    local current_enemy = old_enemies[1]
+    local fallback = current_enemy and current_enemy.id or "dummy"
+    local next_enemy_id = Mod:pickEnemyForPhase(phase_index, fallback, {
+        seed = self.card_battle_seed,
+        phases = self.card_phase_rarities,
+    })
+    if not next_enemy_id then return end
+
+    local world_character
+    local world_position
+    for _, enemy in ipairs(old_enemies) do
+        world_character = world_character or self.enemy_world_characters[enemy]
+        world_position = world_position or self.enemy_beginning_positions[enemy]
+        self.enemy_world_characters[enemy] = nil
+        self.enemy_beginning_positions[enemy] = nil
+        enemy:remove()
+    end
+
+    self.enemies = {}
+    self.enemies_index = {}
+    local enemy = self.encounter:addEnemy(next_enemy_id)
+    self:positionNetworkEnemies(false)
+    self:triggerBiteForEnemy(enemy)
+    self.enemy_beginning_positions[enemy] = world_position or {enemy.x, enemy.y}
+    if world_character then
+        self.enemy_world_characters[enemy] = world_character
+        world_character.battler = enemy
+    end
+end
+
+function Battle:getBiteStatusTarget()
+    local local_index = 1
+    for index, member in ipairs(self.network_party) do
+        if member.local_player then
+            local_index = index
+            break
+        end
+    end
+
+    local panel_x = PANEL_X + ((local_index - 1) * (PANEL_WIDTH + PANEL_GAP))
+    return panel_x + 6, PANEL_Y - 42
+end
+
+function Battle:animateBiteStatusFromCard(slot)
+    if not self.bite_status then return end
+
+    local card_texture = Assets.getTexture("card")
+    local card_x = self.card_positions[slot]
+    if not card_x then return end
+
+    self.bite_status:beginAcquire(
+        card_x + ((card_texture:getWidth() - self.bite_status.width) / 2),
+        CARD_Y
+    )
+end
+
+function Battle:addBiteStatus(amount)
+    local stacks = getBiteStacks(Game:getFlag(BITE_FLAG, 0))
+        + math.max(1, math.floor(tonumber(amount) or 1))
+    Game:setFlag(BITE_FLAG, stacks)
+    if self.bite_status then
+        self.bite_status:setStacks(stacks)
+    end
+end
+
+function Battle:triggerBiteForEnemy(enemy)
+    local stacks = getBiteStacks(Game:getFlag(BITE_FLAG, 0))
+    if not enemy or enemy.name ~= "IMAGE_FRIEND" or stacks <= 0 then
+        return false
+    end
+
+    Game:setFlag(BITE_FLAG, 0)
+    if self.bite_status then
+        self.bite_status.acquiring = false
+        self.bite_status:setStacks(0)
+    end
+    if self.party[1] then
+        self.party[1]:hurt(BITE_DAMAGE * stacks, true)
+    end
+    return true
 end
 
 ---Creates only the player-controlled party member for the stock battle.
@@ -451,12 +563,6 @@ function Battle:isCardPartyOnline()
     return gcsn and gcsn.party_members and next(gcsn.party_members) ~= nil
 end
 
-function Battle:createCardDealSeed()
-    local timer_part = math.floor(love.timer.getTime() * 1000000)
-    local random_part = love.math.random(1, 2147483646)
-    return ((timer_part + random_part) % 2147483646) + 1
-end
-
 function Battle:getCardPools()
     local enemy = self.enemies[1]
     local cards = enemy and enemy.cards
@@ -580,10 +686,7 @@ function Battle:beginCardDecisionPhase(seed)
         self.tension_regen_round = self.card_round
     end
 
-    self.card_deal_seed = seed or self:createCardDealSeed()
-    if not self.card_phase_total then
-        self.card_phase_total = (self.card_deal_seed % 6) + 1
-    end
+    self.card_deal_seed = seed or Mod:getPhaseSeed(self.card_battle_seed, self.card_round)
     self.card_phase_current = self.card_round
     self:dealCards(self.card_amount, self.card_deal_seed)
     self.card_selection = 1
@@ -724,6 +827,10 @@ function Battle:selectCard(choice)
 
     self.card_selections.__local = choice
     Assets.playSound("ui_select")
+    local card = self.card_choices[choice]
+    if card and card.onSelected then
+        card:onSelected(self)
+    end
     self:sendCardSelection(choice)
 end
 
@@ -795,6 +902,7 @@ function Battle:advanceCardPhase()
     end
 
     self.card_round = self.card_round + 1
+    self:replacePhaseEnemy(self.card_round)
     self.card_deal_seed = nil
     self.card_selections = {}
     self.card_choices = {}
@@ -1250,7 +1358,7 @@ function Battle:drawCards()
         end
 
         Draw.setColor(1, 1, 1, card_alpha)
-        love.graphics.setFont(Assets.getFont("small"))
+        love.graphics.setFont(Assets.getFont("tenna", 8))
         love.graphics.printf(choice:getName(), x + 8, CARD_Y + 14, card:getWidth() - 8, "center")
 
         love.graphics.setFont(Assets.getFont("main", 16))
@@ -1305,9 +1413,13 @@ function Battle:draw()
     end
 
     local visible_damage_numbers = {}
+    local visible_statuses = {}
     for _, child in ipairs(self.children) do
         if child.is_door_damage_number and child.visible then
             table.insert(visible_damage_numbers, child)
+            child.visible = false
+        elseif child.is_door_status and child.visible then
+            table.insert(visible_statuses, child)
             child.visible = false
         end
     end
@@ -1332,6 +1444,13 @@ function Battle:draw()
 
     love.graphics.push("all")
     self:drawNetworkPartyStrip()
+    love.graphics.pop()
+
+    love.graphics.push("all")
+    for _, status in ipairs(visible_statuses) do
+        status.visible = true
+        status:fullDraw()
+    end
     love.graphics.pop()
 
     love.graphics.push("all")

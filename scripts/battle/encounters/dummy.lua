@@ -7,14 +7,12 @@ function Dummy:init()
     self.text = "* The tutorial begins...?"
 
     -- Battle music ("battle" is rude buster)
-    self.music = "fight1"
-    -- Number of cards dealt from Battle's card bank for this encounter.
-    self.card_amount = 2
+    self.music = "battle"
     -- Enables the purple grid battle background
     self.background = true
 
-    -- Add the dummy enemy to the encounter
-    self:addEnemy("dummy")
+    -- Draw from the pool matching the first phase shown by Nextscreen.
+    self:addEnemy(Mod:pickEnemyForCurrentPhase("dummy"))
 
     --- Uncomment this line to add another!
     --self:addEnemy("dummy")
