@@ -11,7 +11,7 @@ function actor:init()
     self.height = 30
 
     -- Hitbox for this actor in the overworld (optional, uses width and height by default)
-    self.hitbox = {4, 24, 15, 6}
+    self.hitbox = {3, 21, 17, 13}
 	
     -- Color for this actor used in outline areas (optional, defaults to red)
     self.color = {0.5, 1, 1}
@@ -46,12 +46,12 @@ function actor:init()
 
     -- Table of sprite offsets (indexed by sprite name)
     self.offsets = {
-        ["walk/left"] = {0, 0},
-        ["walk/right"] = {0, 0},
-        ["walk/up"] = {0, 0},
-        ["walk/down"] = {0, 0},
-        ["fell"] = {0, 15},
-	}
+        ["fell"] = {-3, 13};
+        ["walk/down"] = {0, 0};
+        ["walk/left"] = {1, 0};
+        ["walk/right"] = {1, 0};
+        ["walk/up"] = {0, 0};
+    }
 end
 
 return actor
