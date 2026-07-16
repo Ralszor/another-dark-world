@@ -10,7 +10,7 @@ return {
   tilewidth = 40,
   tileheight = 40,
   nextlayerid = 9,
-  nextobjectid = 21,
+  nextobjectid = 23,
   properties = {
     ["name"] = "Test Map - Room 2"
   },
@@ -23,7 +23,7 @@ return {
     },
     {
       name = "object_stuff",
-      firstgid = 73,
+      firstgid = 97,
       filename = "../tilesets/object_stuff.tsx",
       exportfilename = "../tilesets/object_stuff.lua"
     }
@@ -80,10 +80,10 @@ return {
       encoding = "lua",
       data = {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 48, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53, 54, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 60, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 66, 0,
+        0, 0, 0, 0, 47, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 71, 72, 0,
+        0, 0, 0, 0, 53, 54, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 77, 78, 0,
+        0, 0, 0, 0, 59, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 83, 84, 0,
+        0, 0, 0, 0, 65, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 89, 90, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 44, 45, 46, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 50, 51, 52, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 56, 57, 58, 0, 0, 0, 0, 0, 0, 0,
@@ -112,12 +112,12 @@ return {
           name = "",
           type = "",
           shape = "rectangle",
-          x = 360,
+          x = 340,
           y = 200,
           width = 240,
           height = 160,
           rotation = 0,
-          gid = 73,
+          gid = 97,
           visible = true,
           properties = {}
         }
@@ -142,7 +142,7 @@ return {
           name = "nextscreen",
           type = "",
           shape = "rectangle",
-          x = 360,
+          x = 340,
           y = 40,
           width = 240,
           height = 160,
@@ -347,6 +347,22 @@ return {
           visible = true,
           properties = {
             ["cutscene"] = "go.nextdoor",
+            ["once"] = false
+          }
+        },
+        {
+          id = 22,
+          name = "script",
+          type = "",
+          shape = "rectangle",
+          x = 160,
+          y = 110,
+          width = 80,
+          height = 80,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["cutscene"] = "go.cashout",
             ["once"] = false
           }
         }

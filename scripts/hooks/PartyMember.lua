@@ -13,6 +13,7 @@ end
 function PartyMember:init(...)
     super.init(self, ...)
     ensureTension(self)
+    self.active = true
 end
 
 function PartyMember:getTension()
@@ -36,6 +37,23 @@ function PartyMember:addTension(amount)
 
     if gained > 0 and Game and Game.battle and Game.battle.onPartyTensionAdded then
         Game.battle:onPartyTensionAdded(self, gained)
+    end
+    return value
+end
+
+function PartyMember:getStat(name, ...)
+    local value = super.getStat(self, name, ...)
+    if name == "health"
+        and Game
+        and Game.party
+        and self == Game.party[1]
+    then
+        local token = Mod:getToken()
+        if token == "refused" then
+            return 50
+        elseif token == "prophet" then
+            return 150
+        end
     end
     return value
 end

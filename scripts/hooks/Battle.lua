@@ -13,7 +13,6 @@ local STRIP_Y = 405
 local PANEL_Y = 425
 local PANEL_X = 28
 local PANEL_WIDTH = 135
-local PANEL_HEIGHT = 52
 local PANEL_GAP = 15
 local CARD_Y = 105
 local CARD_AMOUNT = 2
@@ -22,11 +21,13 @@ local CARD_AREA_X = 250
 local CARD_AREA_WIDTH = SCREEN_WIDTH - CARD_AREA_X
 local ACTION_CARD_COST = 8
 local TENSION_REGEN = 4
-local ACTION_BOX_WIDTH = 70
-local ACTION_BOX_HEIGHT = 22
 local ENEMY_FADE_SPEED = 3
 local CARD_FADE_SPEED = 4
 local ROUND_COMPLETE_TIME = 1.5
+local CARD_PLAYER_RESOLVE_DELAY = 0.75
+local RESURRECTION_DELAY = 0.75
+local RESURRECTION_FILL_TIME = 1
+local LAST_PLAYER_DEATH_DELAY = 0.75
 local CARD_SYNC_INTERVAL = 0.5
 local NATIVE_PARTY_Y = 800
 local BITE_FLAG = "anotherdoor_bite_status"
@@ -56,51 +57,11 @@ local function getPartyColor(party_member, actor_id)
 end
 
 local function getHealth(member)
-    local source = member.battler
-    if source and source.getHealth and source.getStat then
-        return source:getHealth(), source:getStat("health")
-    elseif member.local_player and member.chara then
-        return member.chara:getHealth(), member.chara:getStat("health")
-    end
+    return StatBox.getHealth(member)
 end
 
 local function getHeadTexture(member)
-    if not member.chara or not member.chara.getHeadIcons then
-        return nil
-    end
-
-    local path = member.chara:getHeadIcons()
-    if not path then
-        return nil
-    end
-
-    local success, texture = pcall(Assets.getTexture, path .. "/head")
-    return success and texture or nil
-end
-
-local function getNameTexture(member)
-    if not member.chara or not member.chara.getNameSprite then
-        return nil
-    end
-
-    local path = member.chara:getNameSprite()
-    if not path then
-        return nil
-    end
-
-    local success, texture = pcall(Assets.getTexture, path)
-    return success and texture or nil
-end
-
-local function printOutlined(text, x, y, color, scale)
-    scale = scale or 1
-    Draw.setColor(COLORS.black)
-    love.graphics.print(text, x - 1, y, 0, scale, scale)
-    love.graphics.print(text, x + 1, y, 0, scale, scale)
-    love.graphics.print(text, x, y - 1, 0, scale, scale)
-    love.graphics.print(text, x, y + 1, 0, scale, scale)
-    Draw.setColor(color)
-    love.graphics.print(text, x, y, 0, scale, scale)
+    return StatBox.getHeadTexture(member)
 end
 
 local function getActorID(player, known_player)
@@ -181,19 +142,31 @@ function Battle:init()
     self.card_sync_timer = 0
     self.card_reveal_progress = 0
     self.card_effect_resolved = false
+    self.card_resolution_started = false
+    self.card_resolution_delay = 0
+    self.card_resolution_end = 0
     self.card_mouse_x = nil
     self.card_mouse_y = nil
     self.card_health_cache = {}
     self.card_tension_cache = {}
     self.tension_regen_round = nil
     self.poison_damage_round = nil
+    self.round_death_reported = false
     self.tension = {visible = false}
     self.network_tension = {}
     self.network_statuses = {}
+    self.network_money = {}
     self.door_statuses = {}
+    self.network_tokens = {}
+    self.network_token_types = {}
+    self.network_stat_boxes = {}
+    self.card_objects = {}
+    self.card_resurrections = {}
+    self.resurrection_serial = 0
     self.card_cursor_was_visible = MOUSE_VISIBLE
     self.card_os_cursor_was_visible = love.mouse.isVisible()
     self:refreshNetworkParty()
+    self:refreshNetworkTokens()
 end
 
 ---Creates the stock UI objects so Battle's state machine remains valid, but the
@@ -277,12 +250,28 @@ function Battle:returnToWorld()
         or (not leader and Mod:getLocalPartyNumber() == 1)
     self.phase_queue_advanced = true
     super.returnToWorld(self)
+    if Mod.round_reset_pending and not Mod.round_reset_waiting_for_host then
+        Mod:completeRoundReset()
+    elseif not Mod:isRoundActive() then
+        Mod:startSpectatingNextActive()
+    end
     if advance_phase and can_advance_queue then
         Mod:advancePhaseQueue()
         if gcsn then
             Mod:syncNextBattleFlag(true, true)
         end
     end
+end
+
+function Battle:forceAnotherDoorRoundEnd()
+    if self.anotherdoor_round_forced_end then return end
+    self.anotherdoor_round_forced_end = true
+    self.phase_queue_advanced = true
+    self.card_phase = "ENDING"
+    self.card_enemy_alpha = 0
+    self.card_cards_alpha = 0
+    self:setState("TRANSITIONOUT", "CARD_GAME_COMPLETE")
+    self.encounter:onBattleEnd()
 end
 
 function Battle:positionNetworkEnemies(transitioning)
@@ -516,7 +505,6 @@ function Battle:refreshNetworkParty()
             chara = local_battler.chara,
             actor_id = local_battler.actor and local_battler.actor.id,
             name = local_battler.chara:getName(),
-            heart_sprite = "player/heart",
         })
     end
 
@@ -539,12 +527,14 @@ function Battle:refreshNetworkParty()
             table.insert(party, {
                 local_player = false,
                 uuid = uuid,
-                party_number = tonumber(battler and battler.party_number) or math.huge,
+                party_number = tonumber(battler and battler.party_number)
+                    or tonumber(world_player and world_player.party_number)
+                    or tonumber(known_player and known_player.party_number)
+                    or math.huge,
                 battler = battler,
                 chara = actor_id and Game:getPartyMember(actor_id),
                 actor_id = actor_id,
                 name = name,
-                heart_sprite = "player/heart",
             })
         end
     end
@@ -565,6 +555,9 @@ function Battle:refreshNetworkParty()
         member.soul_color = copyColor(SOUL_COLORS[index], COLORS.red)
         member.box_color = getPartyColor(member.chara, member.actor_id)
         if member.local_player and member.chara then
+            member.active = Mod:isRoundActive()
+            member.token_id = Mod:getToken()
+            member.money = Mod:getLocalMoney()
             member.chara.tension = member.chara.tension or {
                 value = 0,
                 max = 100,
@@ -573,6 +566,11 @@ function Battle:refreshNetworkParty()
             member.tension = member.chara.tension
         else
             local key = tostring(member.uuid or index)
+            local round_state = Mod.remote_round_states
+                and Mod.remote_round_states[key]
+            member.active = not round_state or round_state.active
+            member.token_id = round_state and round_state.token or "heart"
+            member.money = self.network_money[key] or 0
             self.network_tension[key] = self.network_tension[key] or {
                 value = 0,
                 max = 100,
@@ -580,9 +578,110 @@ function Battle:refreshNetworkParty()
             }
             member.tension = self.network_tension[key]
         end
+
+        local resurrection = self.card_resurrections[getSelectionKey(member)]
+        if resurrection and resurrection.started then
+            member.resurrection_health = resurrection.display_health
+            member.resurrection_max_health = resurrection.max_health
+        end
     end
 
     self.network_party = party
+end
+
+function Battle:getNetworkMemberByKey(member_key)
+    for index, member in ipairs(self.network_party) do
+        if getSelectionKey(member) == member_key then
+            return member, index
+        end
+    end
+end
+
+function Battle:getNetworkPanelX(index)
+    return PANEL_X + ((index - 1) * (PANEL_WIDTH + PANEL_GAP))
+end
+
+function Battle:getNetworkPanelY()
+    return PANEL_Y
+end
+
+function Battle:getNetworkPanelWidth()
+    return PANEL_WIDTH
+end
+
+function Battle:setNetworkToken(member_key, token_id)
+    assert(Token.DEFINITIONS[token_id], "Unknown token: " .. tostring(token_id))
+    self.network_token_types[member_key] = token_id
+    local token = self.network_tokens[member_key]
+    if token then
+        token:setToken(token_id)
+    end
+end
+
+function Battle:refreshNetworkTokens()
+    local active = {}
+    for _, member in ipairs(self.network_party) do
+        local key = getSelectionKey(member)
+        active[key] = true
+
+        local token_id = member.token_id or "heart"
+        self.network_token_types[key] = token_id
+        local token = self.network_tokens[key]
+        if not token then
+            token = Token(self, key, token_id, member.soul_color)
+            token.is_door_token = true
+            self:addChild(token)
+            self.network_tokens[key] = token
+        elseif token.token_id ~= token_id then
+            token:setToken(token_id)
+        end
+        token:setTokenColor(member.soul_color)
+    end
+
+    for key, token in pairs(self.network_tokens) do
+        if not active[key] then
+            token:remove()
+            self.network_tokens[key] = nil
+            self.network_token_types[key] = nil
+        end
+    end
+end
+
+function Battle:refreshNetworkStatBoxes()
+    local active = {}
+    for index, member in ipairs(self.network_party) do
+        local key = getSelectionKey(member)
+        active[key] = true
+        local box = self.network_stat_boxes[key]
+        if not box then
+            box = StatBox(member, self:getNetworkPanelX(index), PANEL_Y)
+            self:addChild(box)
+            self.network_stat_boxes[key] = box
+        end
+        box.x, box.y = self:getNetworkPanelX(index), PANEL_Y
+        box:setData(member)
+        box:setOptions({selected = member.active ~= false and self.card_selections[key] ~= nil, show_tension = member.local_player or self:isTensionVisible()})
+    end
+    for key, box in pairs(self.network_stat_boxes) do
+        if not active[key] then box:remove(); self.network_stat_boxes[key] = nil end
+    end
+end
+
+function Battle:refreshCardObjects()
+    for index, card in ipairs(self.card_choices) do
+        local object = self.card_objects[index]
+        if not object then
+            object = card:createObject(self, index, self.card_positions[index], CARD_Y)
+            self:addChild(object)
+            self.card_objects[index] = object
+        end
+        object:setCard(card, index)
+        object.x, object.y = self.card_positions[index], CARD_Y
+    end
+    for index = #self.card_objects, #self.card_choices + 1, -1 do
+        self.card_objects[index]:remove()
+        table.remove(self.card_objects, index)
+    end
 end
 
 function Battle:getNetworkParty()
@@ -761,6 +860,7 @@ function Battle:dealCards(amount, seed)
     for index = 1, #self.card_choices do
         self.card_positions[index] = start_x + ((index - 1) * (texture:getWidth() + CARD_GAP))
     end
+    self:refreshCardObjects()
 end
 
 function Battle:beginCardDecisionPhase(seed)
@@ -768,6 +868,7 @@ function Battle:beginCardDecisionPhase(seed)
     if self:isCardPartyOnline() and (not leader or not leader.local_player) and not seed then
         self.card_choices = {}
         self.card_positions = {}
+        self:refreshCardObjects()
         self.card_phase = "WAITING_FOR_DEAL"
         return
     end
@@ -792,6 +893,9 @@ function Battle:beginCardDecisionPhase(seed)
     self.card_selections = {}
     self.card_reveal_progress = 0
     self.card_effect_resolved = false
+    self.card_resolution_started = false
+    self.card_resolution_delay = 0
+    self.card_resolution_end = 0
     self.card_phase_timer = 0
     self.card_enemy_alpha = 0
     self.card_cards_alpha = 0
@@ -892,6 +996,34 @@ function Battle:sendStatusState()
     })
 end
 
+function Battle:sendMoneyState()
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer then return end
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_money]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(Mod:getLocalMoney()),
+        }, " "),
+    })
+end
+
+function Battle:receiveMoneyState(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then
+        return
+    end
+    local gcsn = rawget(_G, "GCSN")
+    if not data.uuid or (gcsn and tostring(data.uuid) == tostring(gcsn.uuid)) then
+        return
+    end
+    self.network_money[tostring(data.uuid)] = math.max(
+        0,
+        math.floor(tonumber(data.money) or 0)
+    )
+end
+
 function Battle:receiveStatusState(data)
     if data.encounter and self.encounter and data.encounter ~= self.encounter.id then
         return
@@ -953,6 +1085,7 @@ function Battle:sendCardSelection(choice)
         anotherdoor_card_choice = choice,
         anotherdoor_tension_value = tension and tension.value,
         anotherdoor_tension_max = tension and tension.max,
+        anotherdoor_money = Mod:getLocalMoney(),
     })
     self:sendCardChoice(choice)
 end
@@ -961,6 +1094,8 @@ function Battle:selectCard(choice)
     if self.card_phase ~= "CHOOSING" or self.card_selections.__local then
         return
     end
+    local local_member = self:getLocalNetworkMember()
+    if not local_member or local_member.active == false then return end
 
     if not self:isCardSelectable(choice) then
         Assets.stopAndPlaySound("ui_cant_select")
@@ -1002,7 +1137,9 @@ function Battle:hasEveryCardSelection()
 
     for _, member in ipairs(self.network_party) do
         local key = getSelectionKey(member)
-        if not key or not self.card_selections[key] then
+        if member.active ~= false
+            and (not key or not self.card_selections[key])
+        then
             return false
         end
     end
@@ -1010,9 +1147,34 @@ function Battle:hasEveryCardSelection()
 end
 
 function Battle:resolveCardEffects()
-    if self.card_effect_resolved then
+    if self.card_resolution_started then
         return
     end
+    self.card_resolution_started = true
+    self.card_phase = "RESOLVING"
+    self.card_phase_timer = 0
+
+    local active_rank = 0
+    local active_count = 0
+    for _, member in ipairs(self.network_party) do
+        if member.active ~= false then
+            active_count = active_count + 1
+            if member.local_player then
+                active_rank = active_count
+            end
+        end
+    end
+    self.card_resolution_delay = math.max(0, active_rank - 1)
+        * CARD_PLAYER_RESOLVE_DELAY
+    self.card_resolution_end = math.max(0, active_count - 1)
+        * CARD_PLAYER_RESOLVE_DELAY
+    if active_rank == 0 then
+        self.card_effect_resolved = true
+    end
+end
+
+function Battle:applyLocalCardEffect()
+    if self.card_effect_resolved then return end
     self.card_effect_resolved = true
 
     local local_choice = self.card_selections.__local
@@ -1029,8 +1191,220 @@ function Battle:resolveCardEffects()
     elseif damage < 0 and self.party[1] then
         self.party[1]:heal(-damage)
     end
-    self.card_phase = "RESOLVED"
-    self.card_phase_timer = 0
+    self:applyLoversMatchHeal()
+end
+
+function Battle:hasPendingResurrection()
+    for _, resurrection in pairs(self.card_resurrections) do
+        if not resurrection.finished then return true end
+    end
+    return false
+end
+
+function Battle:startRefusedResurrection(battler)
+    local key = "__local"
+    if self.card_resurrections[key] then return end
+    battler.chara.anotherdoor_resurrecting = true
+    self.card_resurrections[key] = {
+        battler = battler,
+        timer = 0,
+        delay = RESURRECTION_DELAY,
+        duration = RESURRECTION_FILL_TIME,
+        max_health = battler.chara:getStat("health"),
+        display_health = 0,
+        local_player = true,
+        started = false,
+        finished = false,
+    }
+end
+
+function Battle:isLocalResurrecting()
+    local resurrection = self.card_resurrections.__local
+    return resurrection and not resurrection.finished
+end
+
+function Battle:tryRefusedResurrection()
+    local battler = self.party and self.party[1]
+    if not battler
+        or not battler.chara
+        or battler.chara:getHealth() > 0
+        or Mod:getToken() ~= "refused"
+        or Mod:hasUsedRefusedResurrection()
+    then
+        return false
+    end
+
+    if not Mod:useRefusedResurrection() then return false end
+    self:startRefusedResurrection(battler)
+    battler.chara:setHealth(0)
+    if not battler.is_down then battler:down() end
+    return true
+end
+
+function Battle:handleLocalRoundDeath()
+    if self:isLocalResurrecting() then return true end
+    if self:tryRefusedResurrection() then return true end
+    if self.round_death_reported then return false end
+
+    self.round_death_reported = true
+    self.round_death_timer = 0
+    Game.money = 0
+    Mod:syncRoundState(true)
+    return false
+end
+
+function Battle:updateLocalRoundDeath()
+    if not self.round_death_reported or self.round_death_finalized then return end
+    self.round_death_timer = (self.round_death_timer or 0) + DT
+    if self.round_death_timer >= LAST_PLAYER_DEATH_DELAY then
+        self.round_death_finalized = true
+        Mod:markLocalDeath()
+    end
+end
+
+function Battle:spawnResurrectionNumber(member, index)
+    if not member or not index then return end
+    local panel_x = PANEL_X + ((index - 1) * (PANEL_WIDTH + PANEL_GAP))
+    local head = getHeadTexture(member)
+    local icon_width = head and head:getWidth() or 24
+    local icon_height = head and head:getHeight() or 24
+    self:addChild(ResurrectionNumber(
+        panel_x + 5 + (icon_width / 2),
+        PANEL_Y + 7 + (icon_height / 2)
+    ))
+end
+
+function Battle:sendResurrectionState(max_health)
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer then return end
+    self.resurrection_serial = self.resurrection_serial + 1
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_resurrection]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(self.card_round),
+            tostring(self.resurrection_serial),
+            tostring(max_health),
+        }, " "),
+    })
+end
+
+function Battle:receiveResurrectionState(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then
+        return
+    end
+    if tonumber(data.round) ~= self.card_round or not data.uuid then return end
+    local gcsn = rawget(_G, "GCSN")
+    if gcsn and tostring(data.uuid) == tostring(gcsn.uuid) then return end
+    local key = tostring(data.uuid)
+    local serial = tonumber(data.serial) or 0
+    local previous = self.card_resurrections[key]
+    if previous and (previous.serial or 0) >= serial then return end
+
+    self.card_resurrections[key] = {
+        timer = 0,
+        delay = 0,
+        duration = RESURRECTION_FILL_TIME,
+        max_health = math.max(1, tonumber(data.max_health) or 50),
+        display_health = 0,
+        local_player = false,
+        started = true,
+        finished = false,
+        serial = serial,
+    }
+    local member, index = self:getNetworkMemberByKey(key)
+    self:spawnResurrectionNumber(member, index)
+    self.card_health_cache[key] = 0
+    Assets.playSound("item")
+end
+
+function Battle:updateResurrections()
+    for key, resurrection in pairs(self.card_resurrections) do
+        resurrection.timer = resurrection.timer + DT
+        if not resurrection.started
+            and resurrection.timer >= resurrection.delay
+        then
+            resurrection.started = true
+            resurrection.timer = resurrection.delay
+            local member, index = self:getNetworkMemberByKey(key)
+            self:spawnResurrectionNumber(member, index)
+            if resurrection.local_player then
+                resurrection.battler:revive()
+                self:sendResurrectionState(resurrection.max_health)
+            end
+            Assets.playSound("item")
+        end
+
+        if resurrection.started and not resurrection.finished then
+            local progress = MathUtils.clamp(
+                (resurrection.timer - resurrection.delay) / resurrection.duration,
+                0,
+                1
+            )
+            local eased = progress * progress * (3 - (2 * progress))
+            resurrection.display_health = MathUtils.lerp(
+                0,
+                resurrection.max_health,
+                eased
+            )
+            self.card_health_cache[key] = resurrection.display_health
+            if resurrection.local_player then
+                resurrection.battler.chara:setHealth(resurrection.display_health)
+            end
+            if progress >= 1 then
+                resurrection.finished = true
+                resurrection.display_health = resurrection.max_health
+                if resurrection.local_player then
+                    resurrection.battler.chara:setHealth(resurrection.max_health)
+                    resurrection.battler.chara.anotherdoor_resurrecting = nil
+                    self.card_health_cache.__local = resurrection.max_health
+                    self.card_resurrections[key] = nil
+                    Mod:syncRoundState(true)
+                end
+            end
+        elseif resurrection.finished and not resurrection.local_player then
+            local remote = Mod.remote_round_states
+                and Mod.remote_round_states[key]
+            if (remote and tonumber(remote.health) >= resurrection.max_health)
+                or resurrection.timer >= resurrection.duration + 2
+            then
+                self.card_resurrections[key] = nil
+            end
+        end
+    end
+end
+
+function Battle:applyLoversMatchHeal()
+    local local_member = self:getLocalNetworkMember()
+    if not local_member or local_member.active == false then return end
+    local token = local_member.token_id
+    local opposite = token == "lovers_l" and "lovers_r"
+        or token == "lovers_r" and "lovers_l"
+    if not opposite then return end
+
+    local local_choice = self.card_selections.__local
+    if not local_choice then return end
+    for _, member in ipairs(self.network_party) do
+        if member ~= local_member
+            and member.active ~= false
+            and member.token_id == opposite
+            and self.card_selections[getSelectionKey(member)] == local_choice
+        then
+            if self.party[1] then self.party[1]:heal(3) end
+            return
+        end
+    end
+end
+
+function Battle:checkGameOver()
+    if self:isLocalResurrecting() then
+        return
+    end
+    -- Round death is handled by Mod:markLocalDeath so the last active player
+    -- exits this encounter cleanly instead of entering Kristal's game-over.
+    return
 end
 
 function Battle:advanceCardPhase()
@@ -1053,14 +1427,8 @@ function Battle:advanceCardPhase()
 end
 
 function Battle:getCardAtPosition(x, y)
-    local card = Assets.getTexture("card")
-    for index, card_x in ipairs(self.card_positions) do
-        local extra_height = self.card_choices[index].party_action and ACTION_BOX_HEIGHT or 0
-        if x >= card_x and x < card_x + card:getWidth()
-            and y >= CARD_Y and y < CARD_Y + card:getHeight() + extra_height
-        then
-            return index
-        end
+    for index, object in ipairs(self.card_objects) do
+        if object:containsPoint(x, y) then return index end
     end
 end
 
@@ -1115,9 +1483,24 @@ function Battle:updateCardGame()
         if self.card_reveal_progress >= 1 then
             self:resolveCardEffects()
         end
+    elseif self.card_phase == "RESOLVING" then
+        self.card_phase_timer = self.card_phase_timer + DT
+        if not self.card_effect_resolved
+            and self.card_phase_timer >= self.card_resolution_delay
+        then
+            self:applyLocalCardEffect()
+        end
+        if self.card_effect_resolved
+            and self.card_phase_timer >= self.card_resolution_end
+        then
+            self.card_phase = "RESOLVED"
+            self.card_phase_timer = 0
+        end
     elseif self.card_phase == "RESOLVED" then
         self.card_phase_timer = self.card_phase_timer + DT
-        if self.card_phase_timer >= ROUND_COMPLETE_TIME then
+        if self.card_phase_timer >= ROUND_COMPLETE_TIME
+            and not self:hasPendingResurrection()
+        then
             self.card_phase = "ROUND_FADE_OUT"
         end
     elseif self.card_phase == "ROUND_FADE_OUT" then
@@ -1149,6 +1532,7 @@ function Battle:updateCardSync()
     end
     self:sendTensionState()
     self:sendStatusState()
+    self:sendMoneyState()
 end
 
 function Battle:spawnDoorDamageNumber(member, index, amount, healing)
@@ -1246,12 +1630,25 @@ end
 
 function Battle:update()
     self:keepNativePartyOffscreen()
+    self:updateResurrections()
     self:refreshNetworkParty()
+    self:refreshNetworkStatBoxes()
+    self:refreshNetworkTokens()
     self:refreshDoorStatuses()
     self:updateCardGame()
     self:updateCardSync()
     self:updateDoorDamageNumbers()
     self:updateTensionNumbers()
+    self:updateLocalRoundDeath()
+    local local_member = self:getLocalNetworkMember()
+    if not self.round_death_reported
+        and local_member
+        and local_member.chara
+        and local_member.chara:getHealth() <= 0
+        and not self:isLocalResurrecting()
+    then
+        self:handleLocalRoundDeath()
+    end
     self.network_grid_scroll = (self.network_grid_scroll + (20 * DT)) % 24
     super.update(self)
     self:keepNativePartyOffscreen()
@@ -1319,107 +1716,14 @@ function Battle:isTensionVisible()
     return false
 end
 
-function Battle:drawNetworkTension(member, x, y)
-    if not member.local_player and not self:isTensionVisible() then
-        return
-    end
-
-    local tension = member.tension or {value = 0, max = 100}
-    local maximum = math.max(tension.max or 100, 1)
-    local value = MathUtils.clamp(tension.value or 0, 0, maximum)
-    local percentage = value / maximum
-    local is_max = value >= maximum
-
-    love.graphics.setFont(Assets.getFont("tenna", 8))
-    Draw.setColor(is_max and PALETTE["tension_maxtext"] or PALETTE["tension_fill"])
-    love.graphics.print(is_max and "TP: MAX" or ("TP: " .. math.floor(percentage * 100) .. "%"), x + 6, y - 13)
-
-    local bar_x = x + 67
-    local bar_y = y - 14
-    local bar_width = PANEL_WIDTH - 74
-    Draw.setColor(PALETTE["tension_back"])
-    love.graphics.rectangle("fill", bar_x, bar_y, bar_width, 9, 2, 2)
-    Draw.setColor(is_max and PALETTE["tension_max"] or PALETTE["tension_fill"])
-    love.graphics.rectangle("fill", bar_x, bar_y, bar_width * percentage, 9, 2, 2)
-end
-
-function Battle:drawNetworkPartyPanel(member, x, y)
-    self:drawNetworkTension(member, x, y)
-    local selected = self.card_selections[getSelectionKey(member)] ~= nil
-    if not selected then
-        Draw.setColor(COLORS.black)
-        love.graphics.rectangle("fill", x, y, PANEL_WIDTH, PANEL_HEIGHT)
-        Draw.setColor(member.box_color)
-        love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", x + 1, y + 1, PANEL_WIDTH - 2, PANEL_HEIGHT - 2)
-        love.graphics.rectangle("line", x + 1, y + 1, PANEL_WIDTH - 2, -20)
-        love.graphics.setLineWidth(1)
-    end
-
-    local head = getHeadTexture(member)
-    if head then
-        local scale = math.min(30 / head:getWidth(), 30 / head:getHeight())
-        Draw.setColor(COLORS.white)
-        Draw.draw(head, x + 5, y + 7, 0, 1, 1)
-    end
-
-    local health, max_health = getHealth(member)
-    local bar_x = x + 25
-    local bar_width = 70
-
-    love.graphics.setFont(Assets.getFont("smallnumbers"))
-    Draw.setColor(COLORS.white)
-    love.graphics.print("HP", bar_x, y + 2)
-
-    Draw.setColor(COLORS.dkgray)
-    love.graphics.rectangle("fill", bar_x + 16, y + 16, bar_width, 8, 4, 4)
-    local health_x = bar_x + 38
-    local health_y = y + 8
-    if health and max_health and max_health > 0 then
-        Draw.setColor(member.box_color)
-        love.graphics.rectangle("fill", bar_x + 16, y + 16, bar_width * MathUtils.clamp(health / max_health, 0, 1), 8, 4, 4)
-
-        local current_text = tostring(math.floor(health))
-        local max_text = "/" .. tostring(math.floor(max_health))
-        printOutlined(current_text, health_x, health_y, COLORS.white)
-        printOutlined(max_text, health_x + love.graphics.getFont():getWidth(current_text) + 1, health_y + 4, COLORS.white, 0.5)
-    else
-        local current_text = "--"
-        printOutlined(current_text, health_x, health_y, COLORS.gray)
-        printOutlined("/--", health_x + love.graphics.getFont():getWidth(current_text) + 1, health_y + 4, COLORS.gray, 0.5)
-    end
-
-    Draw.setColor(COLORS.white)
-    local name_texture = getNameTexture(member)
-    if name_texture then
-        local max_width = PANEL_WIDTH - 30
-        local max_height = PANEL_HEIGHT - 29
-        local scale = math.min(1, max_width / name_texture:getWidth(), max_height / name_texture:getHeight())
-        Draw.draw(name_texture, x + 5, y + 32, 0, scale, scale)
-    else
-        love.graphics.setFont(Assets.getFont("main", 16))
-        local name = string.upper(tostring(member.name or "PLAYER"))
-        love.graphics.print(name, x + 5, y + 32)
-    end
-
-    if self.card_phase == "CHOOSING" then
-        local heart = Assets.getTexture(member.heart_sprite)
-        Draw.setColor(
-            member.soul_color[1],
-            member.soul_color[2],
-            member.soul_color[3],
-            self.card_cards_alpha or 1
-        )
-        Draw.draw(heart, x + PANEL_WIDTH - 20, y + 10)
-    end
-end
-
-function Battle:getCardHeartTarget(member, heart_width)
+function Battle:getCardTokenTarget(member, token_width)
     local choice = self.card_selections[getSelectionKey(member)] or 1
     local rank = 0
     local count = 0
     for _, other in ipairs(self.network_party) do
-        if self.card_selections[getSelectionKey(other)] == choice then
+        if other.active ~= false
+            and self.card_selections[getSelectionKey(other)] == choice
+        then
             count = count + 1
             if other == member then
                 rank = count
@@ -1430,116 +1734,34 @@ function Battle:getCardHeartTarget(member, heart_width)
     local card = Assets.getTexture("card")
     local spread = 18
     local center_offset = (rank - ((count + 1) / 2)) * spread
-    local x = self.card_positions[choice] + (card:getWidth() / 2) - (heart_width / 2) + center_offset
+    local x = self.card_positions[choice] + (card:getWidth() / 2) - (token_width / 2) + center_offset
     local y = CARD_Y + card:getHeight() - 28
     return x, y
-end
-
-function Battle:drawCardHearts()
-    if self.card_phase ~= "REVEAL" and self.card_phase ~= "RESOLVED" then
-        return
-    end
-
-    local progress = self.card_phase == "RESOLVED" and 1 or self.card_reveal_progress
-    progress = 1 - ((1 - progress) ^ 3)
-
-    for index, member in ipairs(self.network_party) do
-        local heart = Assets.getTexture(member.heart_sprite)
-        local panel_x = PANEL_X + ((index - 1) * (PANEL_WIDTH + PANEL_GAP))
-        local start_x = panel_x + PANEL_WIDTH - 20
-        local start_y = PANEL_Y + 10
-        local target_x, target_y = self:getCardHeartTarget(member, heart:getWidth())
-
-        Draw.setColor(
-            member.soul_color[1],
-            member.soul_color[2],
-            member.soul_color[3],
-            self.card_cards_alpha or 1
-        )
-        Draw.draw(
-            heart,
-            MathUtils.lerp(start_x, target_x, progress),
-            MathUtils.lerp(start_y, target_y, progress)
-        )
-    end
-end
-
-function Battle:drawCards()
-    if #self.card_choices == 0 or #self.card_positions == 0 then
-        return
-    end
-
-    local card = Assets.getTexture("card")
-    local local_choice = self.card_selections.__local
-    local alpha = self.card_cards_alpha or 1
-
-    love.graphics.setFont(Assets.getFont("small"))
-    Draw.setColor(1, 1, 1, alpha)
-    local prompt = local_choice and "WAITING FOR PLAYERS..." or "CHOOSE A CARD"
-    if self.card_phase == "REVEAL" then
-        prompt = "CHOICES REVEALED!"
-    elseif self.card_phase == "RESOLVED" then
-        prompt = "ROUND COMPLETE"
-    end
-    local first_x = self.card_positions[1]
-    local last_x = self.card_positions[#self.card_positions]
-    love.graphics.printf(prompt, first_x, CARD_Y - 30, (last_x + card:getWidth()) - first_x, "center")
-
-    for index, choice in ipairs(self.card_choices) do
-        local x = self.card_positions[index]
-        local selectable = self:isCardSelectable(index)
-        local card_alpha = selectable and alpha or (alpha * 0.4)
-        Draw.setColor(1, 1, 1, card_alpha)
-        Draw.draw(card, x, CARD_Y)
-
-        if self.card_phase == "CHOOSING" and not local_choice and self.card_selection == index then
-            local highlight = selectable and (COLORS.yellow or COLORS.white)
-                or COLORS.gray or COLORS.grey or COLORS.white
-            Draw.setColor(highlight[1], highlight[2], highlight[3], alpha)
-            love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", x - 3, CARD_Y - 3, card:getWidth() + 6, card:getHeight() + 6, 4, 4)
-            love.graphics.setLineWidth(1)
-        end
-
-        Draw.setColor(1, 1, 1, card_alpha)
-        love.graphics.setFont(Assets.getFont("tenna", 8))
-        love.graphics.printf(choice:getName(), x + 8, CARD_Y + 14, card:getWidth() - 8, "center")
-
-        love.graphics.setFont(Assets.getFont("main", 16))
-        love.graphics.printf(choice:getEffect(), x + 3, CARD_Y + math.floor(card:getHeight() / 2), card:getWidth()-5, "center")
-
-        if choice.party_action then
-            local box_x = x + ((card:getWidth() - ACTION_BOX_WIDTH) / 2)
-            local box_y = CARD_Y + card:getHeight() - 1
-            Draw.setColor(COLORS.black[1], COLORS.black[2], COLORS.black[3], alpha)
-            love.graphics.rectangle("fill", box_x, box_y, ACTION_BOX_WIDTH, ACTION_BOX_HEIGHT, 3, 3)
-            Draw.setColor(1, 1, 1, card_alpha)
-            love.graphics.rectangle("line", box_x, box_y, ACTION_BOX_WIDTH, ACTION_BOX_HEIGHT, 3, 3)
-
-            local member = self:getLocalNetworkMember()
-            local color = member and member.box_color or COLORS.white
-            Draw.setColor(color[1], color[2], color[3], card_alpha)
-            love.graphics.setFont(Assets.getFont("main", 16))
-            love.graphics.printf(
-                self:getActionCardLabel(),
-                box_x,
-                box_y+2,
-                ACTION_BOX_WIDTH,
-                "center"
-            )
-        end
-    end
-
-    self:drawCardHearts()
 end
 
 function Battle:drawNetworkPartyStrip()
     Draw.setColor(COLORS.purple)
     love.graphics.rectangle("fill", 0, STRIP_Y-30, SCREEN_WIDTH, 3)
+end
 
-    for index, member in ipairs(self.network_party) do
-        local x = PANEL_X + ((index - 1) * (PANEL_WIDTH + PANEL_GAP))
-        self:drawNetworkPartyPanel(member, x, PANEL_Y)
+function Battle:drawSpawnedCards(objects)
+    if #objects == 0 then return end
+    local first, last = objects[1], objects[#objects]
+    local alpha = self.card_cards_alpha or 1
+    local prompt = self.card_selections.__local and "WAITING FOR PLAYERS..." or "CHOOSE A CARD"
+    if self.card_phase == "REVEAL" then
+        prompt = "CHOICES REVEALED!"
+    elseif self.card_phase == "RESOLVING" then
+        prompt = "RESOLVING..."
+    elseif self.card_phase == "RESOLVED" then
+        prompt = "ROUND COMPLETE"
+    end
+    love.graphics.setFont(Assets.getFont("small"))
+    Draw.setColor(1, 1, 1, alpha)
+    love.graphics.printf(prompt, first.x, CARD_Y - 30, (last.x + last.width) - first.x, "center")
+    for _, object in ipairs(objects) do
+        object.visible = true
+        object:fullDraw()
     end
 end
 
@@ -1558,9 +1780,21 @@ function Battle:draw()
 
     local visible_damage_numbers = {}
     local visible_statuses = {}
+    local visible_tokens = {}
+    local visible_stat_boxes = {}
+    local visible_cards = {}
     for _, child in ipairs(self.children) do
         if child.is_door_damage_number and child.visible then
             table.insert(visible_damage_numbers, child)
+            child.visible = false
+        elseif child.is_door_stat_box and child.visible then
+            table.insert(visible_stat_boxes, child)
+            child.visible = false
+        elseif child.is_door_card and child.visible then
+            table.insert(visible_cards, child)
+            child.visible = false
+        elseif child.is_door_token and child.visible then
+            table.insert(visible_tokens, child)
             child.visible = false
         end
     end
@@ -1588,11 +1822,25 @@ function Battle:draw()
     love.graphics.pop()
 
     love.graphics.push("all")
-    self:drawCards()
+    self:drawSpawnedCards(visible_cards)
     love.graphics.pop()
 
     love.graphics.push("all")
     self:drawNetworkPartyStrip()
+    love.graphics.pop()
+
+    love.graphics.push("all")
+    for _, box in ipairs(visible_stat_boxes) do
+        box.visible = true
+        box:fullDraw()
+    end
+    love.graphics.pop()
+
+    love.graphics.push("all")
+    for _, token in ipairs(visible_tokens) do
+        token.visible = true
+        token:fullDraw()
+    end
     love.graphics.pop()
 
     love.graphics.push("all")

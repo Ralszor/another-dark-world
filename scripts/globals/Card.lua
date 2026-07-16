@@ -30,6 +30,12 @@ function Card:getEffect()
     return self.revealed and self.effect or ""
 end
 
+---Creates the visual object for this card. Subclasses can override this to
+---provide specialized presentation without changing Battle.
+function Card:createObject(battle, index, x, y)
+    return CardObject(battle, self, index, x, y)
+end
+
 ---Returns the exact damage this card deals to the local player.
 function Card:resolve(battle, member, selections)
     return 0

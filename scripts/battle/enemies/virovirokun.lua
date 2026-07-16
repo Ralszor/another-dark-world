@@ -11,7 +11,7 @@ function Virovirokun:init()
 
     self.name = "Virovirokun"
     self:setActor("virovirokun")
-    self.rarity = "uncommon"
+    self.rarity = "common"
 
     self.path = "enemies/virovirokun"
     self.default = "idle"

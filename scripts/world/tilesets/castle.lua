@@ -11,7 +11,7 @@ return {
   columns = 6,
   image = "../../../assets/sprites/tilesets/castle.png",
   imagewidth = 120,
-  imageheight = 240,
+  imageheight = 324,
   objectalignment = "unspecified",
   tilerendersize = "grid",
   fillmode = "stretch",
@@ -26,6 +26,6 @@ return {
   },
   properties = {},
   wangsets = {},
-  tilecount = 72,
+  tilecount = 96,
   tiles = {}
 }
