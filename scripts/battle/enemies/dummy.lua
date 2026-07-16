@@ -9,6 +9,11 @@ function Dummy:init()
     -- Sets the actor, which handles the enemy's sprites (see scripts/data/actors/dummy.lua)
     self:setActor("dummy")
 
+        self.cards = {
+        {"dummy_hug", "dummy_punch"},
+        {"test_4"},
+    }
+
     -- Enemy health
     self.max_health = 450
     self.health = 450

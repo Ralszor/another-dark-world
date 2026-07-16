@@ -1,27 +1,25 @@
----@class BiteStatus : Object
-local BiteStatus, super = Class(Object)
+---@class PoisonStatus : Object
+local PoisonStatus, super = Class(Object)
 
 local TOOLTIP_WIDTH = 245
 
-function BiteStatus:init(battle, stacks, member_key)
+function PoisonStatus:init(battle, stacks, member_key)
     super.init(self, 0, 0, 20, 20)
-
     self.battle = battle
-    self.member_key = member_key or "__local"
-    self.texture = Assets.getTexture("ui/statuses/friend")
-    self.stacks = math.max(0, math.floor(tonumber(stacks) or 0))
-    self.active = self.stacks > 0
+    self.member_key = member_key
+    self.texture = Assets.getTexture("ui/statuses/salve")
+    self.stacks = 0
     self.acquiring = false
     self.hovered = false
-    self.visible = self.active
     self.pop_time = 0.18
     self.slide_time = 0.55
     self.timer = 0
+    self:setStacks(stacks)
     self:setTargetPosition()
 end
 
-function BiteStatus:setTargetPosition()
-    local x, y = self.battle:getDoorStatusTarget(self.member_key, 1)
+function PoisonStatus:setTargetPosition()
+    local x, y = self.battle:getDoorStatusTarget(self.member_key, 2)
     self.target_x = x
     self.target_y = y
     if not self.acquiring then
@@ -30,7 +28,7 @@ function BiteStatus:setTargetPosition()
     end
 end
 
-function BiteStatus:beginAcquire(x, y)
+function PoisonStatus:beginAcquire(x, y)
     self.start_x = x
     self.start_y = y
     self.x = x
@@ -41,16 +39,13 @@ function BiteStatus:beginAcquire(x, y)
     self.hovered = false
 end
 
-function BiteStatus:setStacks(stacks)
+function PoisonStatus:setStacks(stacks)
     self.stacks = math.max(0, math.floor(tonumber(stacks) or 0))
-    self.active = self.stacks > 0
-    self.visible = self.active or self.acquiring
-    if not self.visible then
-        self.hovered = false
-    end
+    self.visible = self.stacks > 0 or self.acquiring
+    if not self.visible then self.hovered = false end
 end
 
-function BiteStatus:update()
+function PoisonStatus:update()
     self:setTargetPosition()
 
     if self.acquiring then
@@ -72,41 +67,40 @@ function BiteStatus:update()
                 self.acquiring = false
                 self.x = self.target_x
                 self.y = self.target_y
-                self.visible = self.active
+                self.visible = self.stacks > 0
             end
         end
     end
 
-    if self.active and not self.acquiring then
+    if self.visible and not self.acquiring then
         local mouse_x, mouse_y = Input.getMousePosition()
         self.hovered = mouse_x >= self.x and mouse_x < self.x + self.width
             and mouse_y >= self.y and mouse_y < self.y + self.height
     else
         self.hovered = false
     end
-
     super.update(self)
 end
 
-function BiteStatus:draw()
+function PoisonStatus:drawStackCount()
+    local font = Assets.getFont("tenna", 8)
+    local text = tostring(self.stacks)
+    local x = self.width - font:getWidth(text)
+    local y = self.height - font:getHeight()
+    love.graphics.setFont(font)
+    Draw.setColor(COLORS.black)
+    love.graphics.print(text, x - 1, y)
+    love.graphics.print(text, x + 1, y)
+    love.graphics.print(text, x, y - 1)
+    love.graphics.print(text, x, y + 1)
+    Draw.setColor(COLORS.white)
+    love.graphics.print(text, x, y)
+end
+
+function PoisonStatus:draw()
     Draw.setColor(COLORS.white)
     Draw.draw(self.texture, 0, 0)
-
-    if self.stacks > 0 then
-        local font = Assets.getFont("tenna", 8)
-        local text = tostring(self.stacks)
-        local text_x = self.width - font:getWidth(text)
-        local text_y = self.height - font:getHeight()
-
-        love.graphics.setFont(font)
-        Draw.setColor(COLORS.black)
-        love.graphics.print(text, text_x - 1, text_y)
-        love.graphics.print(text, text_x + 1, text_y)
-        love.graphics.print(text, text_x, text_y - 1)
-        love.graphics.print(text, text_x, text_y + 1)
-        Draw.setColor(COLORS.white)
-        love.graphics.print(text, text_x, text_y)
-    end
+    self:drawStackCount()
 
     if self.hovered then
         local tooltip_x = 27
@@ -115,28 +109,24 @@ function BiteStatus:draw()
         end
         local tooltip_y = -23
         local tooltip_height = 60
-
         Draw.setColor(COLORS.black)
         love.graphics.rectangle("fill", tooltip_x, tooltip_y, TOOLTIP_WIDTH, tooltip_height, 3, 3)
         Draw.setColor(COLORS.white)
         love.graphics.rectangle("line", tooltip_x, tooltip_y, TOOLTIP_WIDTH, tooltip_height, 3, 3)
-
         love.graphics.setFont(Assets.getFont("main", 16))
         Draw.setColor(COLORS.yellow or COLORS.white)
-        love.graphics.print("BITE", tooltip_x + 7, tooltip_y + 4)
-
+        love.graphics.print("POISON", tooltip_x + 7, tooltip_y + 4)
         love.graphics.setFont(Assets.getFont("tenna", 8))
         Draw.setColor(COLORS.white)
         love.graphics.printf(
-            "Next time you encounter IMAGE_FRIEND, take 100 damage per stack.",
+            "Take exact damage equal to your POISON stacks each turn.",
             tooltip_x + 7,
             tooltip_y + 24,
             TOOLTIP_WIDTH - 14,
             "left"
         )
     end
-
     super.draw(self)
 end
 
-return BiteStatus
+return PoisonStatus

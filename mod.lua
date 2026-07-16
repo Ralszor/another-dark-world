@@ -287,10 +287,10 @@ end
 
 function Mod:installNetworkHook()
     local gcsn = rawget(_G, "GCSN")
-    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_sync_hook_v3 then
+    if not gcsn or not gcsn.parseServerData or gcsn._anotherdoor_sync_hook_v4 then
         return
     end
-    gcsn._anotherdoor_sync_hook_v3 = true
+    gcsn._anotherdoor_sync_hook_v4 = true
 
     Utils.hook(gcsn, "sendToServer", function(orig, message, ...)
         if type(message) == "table"
@@ -379,6 +379,21 @@ function Mod:installNetworkHook()
                     return
                 end
 
+                local status_encounter, bite, poison = message:match(
+                    "^%[anotherdoor_status%]%s+(%S+)%s+(%d+)%s+(%d+)$"
+                )
+                if status_encounter then
+                    if Game.battle and Game.battle.receiveStatusState then
+                        Game.battle:receiveStatusState({
+                            uuid = data.uuid,
+                            encounter = status_encounter,
+                            bite = bite,
+                            poison = poison,
+                        })
+                    end
+                    return
+                end
+
                 local next_seed = message:match(
                     "^%[anotherdoor_next_battle%]%s+(%d+)$"
                 )
@@ -404,6 +419,7 @@ end
 
 function Mod:init()
     self:installNetworkHook()
+    self.enemy_pools = nil
     print("Loaded " .. self.info.name .. "!")
 
     Game:registerEvent("mouseholeentry", function(data)

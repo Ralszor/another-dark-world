@@ -30,9 +30,10 @@ local ROUND_COMPLETE_TIME = 1.5
 local CARD_SYNC_INTERVAL = 0.5
 local NATIVE_PARTY_Y = 800
 local BITE_FLAG = "anotherdoor_bite_status"
+local POISON_FLAG = "anotherdoor_poison_status"
 local BITE_DAMAGE = 100
 
-local function getBiteStacks(value)
+local function getStatusStacks(value)
     if value == true then
         return 1
     elseif type(value) == "number" then
@@ -185,8 +186,11 @@ function Battle:init()
     self.card_health_cache = {}
     self.card_tension_cache = {}
     self.tension_regen_round = nil
+    self.poison_damage_round = nil
     self.tension = {visible = false}
     self.network_tension = {}
+    self.network_statuses = {}
+    self.door_statuses = {}
     self.card_cursor_was_visible = MOUSE_VISIBLE
     self.card_os_cursor_was_visible = love.mouse.isVisible()
     self:refreshNetworkParty()
@@ -231,9 +235,7 @@ function Battle:postInit(state, encounter)
 
     self:keepNativePartyOffscreen()
 
-    self.bite_status = BiteStatus(self, getBiteStacks(Game:getFlag(BITE_FLAG, 0)))
-    self.bite_status.is_door_status = true
-    self:addChild(self.bite_status)
+    self:refreshDoorStatuses()
 
     self:positionNetworkEnemies(false)
     self:triggerBiteForEnemy(self.enemies[1])
@@ -334,17 +336,63 @@ function Battle:replacePhaseEnemy(phase_index)
     end
 end
 
-function Battle:getBiteStatusTarget()
+function Battle:getDoorStatusTarget(member_key, slot)
     local local_index = 1
     for index, member in ipairs(self.network_party) do
-        if member.local_player then
+        if getSelectionKey(member) == member_key then
             local_index = index
             break
         end
     end
 
     local panel_x = PANEL_X + ((local_index - 1) * (PANEL_WIDTH + PANEL_GAP))
-    return panel_x + 6, PANEL_Y - 42
+    return panel_x + 6 + ((slot - 1) * 24), PANEL_Y - 42
+end
+
+function Battle:refreshDoorStatuses()
+    local active = {}
+    for _, member in ipairs(self.network_party) do
+        local key = getSelectionKey(member)
+        if key then
+            active[key] = true
+            local stacks
+            if member.local_player then
+                stacks = {
+                    bite = getStatusStacks(Game:getFlag(BITE_FLAG, 0)),
+                    poison = getStatusStacks(Game:getFlag(POISON_FLAG, 0)),
+                }
+            else
+                stacks = self.network_statuses[key] or {bite = 0, poison = 0}
+            end
+
+            local statuses = self.door_statuses[key]
+            if not statuses then
+                statuses = {
+                    bite = BiteStatus(self, stacks.bite, key),
+                    poison = PoisonStatus(self, stacks.poison, key),
+                }
+                statuses.bite.is_door_status = true
+                statuses.poison.is_door_status = true
+                self:addChild(statuses.bite)
+                self:addChild(statuses.poison)
+                self.door_statuses[key] = statuses
+            end
+            statuses.bite:setStacks(stacks.bite)
+            statuses.poison:setStacks(stacks.poison)
+            if member.local_player then
+                self.bite_status = statuses.bite
+                self.poison_status = statuses.poison
+            end
+        end
+    end
+
+    for key, statuses in pairs(self.door_statuses) do
+        if not active[key] then
+            statuses.bite:remove()
+            statuses.poison:remove()
+            self.door_statuses[key] = nil
+        end
+    end
 end
 
 function Battle:animateBiteStatusFromCard(slot)
@@ -360,8 +408,19 @@ function Battle:animateBiteStatusFromCard(slot)
     )
 end
 
+function Battle:animatePoisonStatusFromCard(slot)
+    if not self.poison_status then return end
+    local card_texture = Assets.getTexture("card")
+    local card_x = self.card_positions[slot]
+    if not card_x then return end
+    self.poison_status:beginAcquire(
+        card_x + ((card_texture:getWidth() - self.poison_status.width) / 2),
+        CARD_Y
+    )
+end
+
 function Battle:addBiteStatus(amount)
-    local stacks = getBiteStacks(Game:getFlag(BITE_FLAG, 0))
+    local stacks = getStatusStacks(Game:getFlag(BITE_FLAG, 0))
         + math.max(1, math.floor(tonumber(amount) or 1))
     Game:setFlag(BITE_FLAG, stacks)
     if self.bite_status then
@@ -369,8 +428,27 @@ function Battle:addBiteStatus(amount)
     end
 end
 
+function Battle:addPoisonStatus(amount, card_slot)
+    if card_slot then
+        self:animatePoisonStatusFromCard(card_slot)
+    end
+    local stacks = getStatusStacks(Game:getFlag(POISON_FLAG, 0))
+        + math.max(1, math.floor(tonumber(amount) or 1))
+    Game:setFlag(POISON_FLAG, stacks)
+    if self.poison_status then
+        self.poison_status:setStacks(stacks)
+    end
+end
+
+function Battle:applyPoisonDamage()
+    local stacks = getStatusStacks(Game:getFlag(POISON_FLAG, 0))
+    if stacks > 0 and self.party[1] then
+        self.party[1]:hurt(stacks, true)
+    end
+end
+
 function Battle:triggerBiteForEnemy(enemy)
-    local stacks = getBiteStacks(Game:getFlag(BITE_FLAG, 0))
+    local stacks = getStatusStacks(Game:getFlag(BITE_FLAG, 0))
     if not enemy or enemy.name ~= "IMAGE_FRIEND" or stacks <= 0 then
         return false
     end
@@ -694,6 +772,10 @@ function Battle:beginCardDecisionPhase(seed)
         return
     end
 
+    if self.poison_damage_round ~= self.card_round then
+        self.poison_damage_round = self.card_round
+        self:applyPoisonDamage()
+    end
 
     if self.tension_regen_round ~= self.card_round then
         local member = self:getLocalNetworkMember()
@@ -793,6 +875,36 @@ function Battle:sendTensionState()
             tostring(tension.max or 100),
         }, " "),
     })
+end
+
+function Battle:sendStatusState()
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer then return end
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_status]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(getStatusStacks(Game:getFlag(BITE_FLAG, 0))),
+            tostring(getStatusStacks(Game:getFlag(POISON_FLAG, 0))),
+        }, " "),
+    })
+end
+
+function Battle:receiveStatusState(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then
+        return
+    end
+    local gcsn = rawget(_G, "GCSN")
+    if not data.uuid or (gcsn and tostring(data.uuid) == tostring(gcsn.uuid)) then
+        return
+    end
+    local key = tostring(data.uuid)
+    self.network_statuses[key] = {
+        bite = getStatusStacks(tonumber(data.bite)),
+        poison = getStatusStacks(tonumber(data.poison)),
+    }
 end
 
 function Battle:receiveTensionState(data)
@@ -1036,6 +1148,7 @@ function Battle:updateCardSync()
         self:sendCardChoice(self.card_selections.__local)
     end
     self:sendTensionState()
+    self:sendStatusState()
 end
 
 function Battle:spawnDoorDamageNumber(member, index, amount, healing)
@@ -1134,6 +1247,7 @@ end
 function Battle:update()
     self:keepNativePartyOffscreen()
     self:refreshNetworkParty()
+    self:refreshDoorStatuses()
     self:updateCardGame()
     self:updateCardSync()
     self:updateDoorDamageNumbers()
@@ -1448,9 +1562,14 @@ function Battle:draw()
         if child.is_door_damage_number and child.visible then
             table.insert(visible_damage_numbers, child)
             child.visible = false
-        elseif child.is_door_status and child.visible then
-            table.insert(visible_statuses, child)
-            child.visible = false
+        end
+    end
+    for _, statuses in pairs(self.door_statuses or {}) do
+        for _, status in pairs(statuses) do
+            if status.visible then
+                table.insert(visible_statuses, status)
+                status.visible = false
+            end
         end
     end
 
