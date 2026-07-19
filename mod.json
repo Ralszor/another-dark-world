@@ -8,10 +8,10 @@
 
     "chapter": 5,
 
-    "map": "room2",
-    "party": ["ralsei"],
+    "map": "room1",
+    "party": ["vessel"],
     "inventory": {
-        "items": ["darkburger", "darkburger", "ultimate_candy"],
+        "items": ["darkburger"],
         "key_items": ["cell_phone"]
     },
 

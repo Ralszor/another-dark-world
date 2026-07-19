@@ -69,7 +69,11 @@ function DarkMenu:drawAnotherDoorPanelObject(score)
     if not box then box = StatBox(score, x, y); self.anotherdoor_stat_boxes[key] = box end
     box.x, box.y = x, y
     box:setData(score)
-    box:setOptions({alpha = alpha, total = score.total, show_tension = true})
+    box:setOptions({
+        alpha = alpha,
+        total = score.total,
+        show_tension = score.local_player or Mod:getToken() == "unveil",
+    })
     box:fullDraw()
     self:drawAnotherDoorToken(score, x + PANEL_WIDTH - 20, y + 10, alpha)
     self:drawStack("ui/statuses/friend", score.bite, x + 6, y - 42, "BITE", "Next time you encounter IMAGE_FRIEND, take 100 damage per stack.")
@@ -102,7 +106,7 @@ function DarkMenu:getAnotherDoorScores()
     local_poison = tonumber(local_poison) or (local_poison == true and 1 or 0)
     table.insert(scores, {
         uuid = gcsn and gcsn.uuid or "__local",
-        party_number = tonumber(Mod:getLocalPartyNumber()) or 1,
+        party_number = tonumber((Mod:getLocalPartyNumber())) or 1,
         member = local_member,
         name = local_member and local_member:getName() or "PLAYER",
         total = Mod:getRoundTotal(),
@@ -179,13 +183,16 @@ function DarkMenu:startAnotherDoorCashout(amount)
         Game.money = 0
         Mod:setRoundActive(false)
         Mod:startSpectatingNextActive()
-        Mod:areAllRoundPlayersInactive()
+        self.anotherdoor_cashout.round_ended =
+            Mod:areAllRoundPlayersInactive(true)
     end
+    return self.anotherdoor_cashout
 end
 
 function DarkMenu:isAnotherDoorCashingOut()
     return self.anotherdoor_cashout
-        and not self.anotherdoor_cashout.finished
+        and (not self.anotherdoor_cashout.finished
+            or self.anotherdoor_cashout.round_ended == true)
 end
 
 function DarkMenu:onKeyPressed(key)
@@ -217,7 +224,7 @@ function DarkMenu:updateAnotherDoorCashout()
             particle.arrived = true
             self.anotherdoor_cash_arrived = self.anotherdoor_cash_arrived + 1
             Mod:addLocalMoney(-1)
-            Mod:addRound(1, false)
+            Mod:addTotal(1, false)
             Assets.playSound("item")
         end
     end
@@ -228,7 +235,7 @@ function DarkMenu:updateAnotherDoorCashout()
         Mod:setRoundActive(false)
         Mod:startSpectatingNextActive()
         Mod:syncRoundState(true)
-        Mod:areAllRoundPlayersInactive()
+        cashout.round_ended = Mod:areAllRoundPlayersInactive(true)
     end
 end
 

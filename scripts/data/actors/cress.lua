@@ -1,0 +1,154 @@
+local actor, super = Class(Actor, "cress")
+
+function actor:init()
+    super.init(self)
+
+    -- Display name (optional)
+    self.name = "Cress"
+
+    -- Width and height for this actor, used to determine its center
+    self.width = 25
+    self.height = 57
+
+    -- Hitbox for this actor in the overworld (optional, uses width and height by default)
+    self.hitbox = {5, 47, 15, 10}
+
+    -- Color for this actor used in outline areas (optional, defaults to red)
+    self.color = ColorUtils.hexToRGB("#7F6A00FF")
+
+    -- Path to this actor's sprites (defaults to "")
+    self.path = "party/cress/dark"
+    -- This actor's default sprite or animation, relative to the path (defaults to "")
+    self.default = "walk"
+
+    -- Sound to play when this actor speaks (optional)
+    self.voice = "jamm"
+    -- Path to this actor's portrait for dialogue (optional)
+    self.portrait_path = "face/cress"
+    -- Offset position for this actor's portrait (optional)
+    self.portrait_offset = {-19,-3}
+
+    -- Whether this actor as a follower will blush when close to the player
+    self.can_blush = false
+
+    -- Table of sprite animations
+    self.animations = {
+        -- Movement animations
+        ["slide"]               		= {"slide", 4/30, true},
+
+        -- Battle animations
+        ["battle/idle"]         		= {"battle/idle", 0.2, true},
+
+        ["battle/attack"]       		= {"battle/attack", 1/15, false},
+        ["battle/act"]          		= {"battle/act", 1/15, false},
+        ["battle/spell"]        		= {"battle/spell", 1/15, false},
+        ["battle/item"]         		= {"battle/item", 1/15, false, next="battle/idle"},
+        ["battle/spare"]        		= {"battle/act", 1/15, false, next="battle/idle"},
+
+        ["battle/attack_ready"] 		= {"battle/attackready", 0.2, true},
+        ["battle/act_ready"]    		= {"battle/actready", 0.2, true},
+        ["battle/spell_ready"]  		= {"battle/actready", 0.2, true},
+        ["battle/item_ready"]   		= {"battle/itemready", 0.2, true},
+        ["battle/defend_ready"] 		= {"battle/defend", 1/15, false},
+
+        ["battle/act_end"]      		= {"battle/actend", 1/15, false, next="battle/idle"},
+
+        ["battle/hurt"]         		= {"battle/hurt", 1/15, false, temp=true, duration=0.5},
+        ["battle/defeat"]       		= {"battle/defeat", 0.5, true},
+        ["battle/swooned"]              = {"battle/swooned", 1/15, false},
+        ["battle/succumbed"]            = {"battle/swooned", 1/15, false},
+
+        ["battle/transition"]   		= {"battle/transition", 0.2, true},
+        ["battle/intro"]        		= {"battle/intro", 1/15, true},
+        ["battle/victory"]      		= {"battle/victory", 1/10, false},
+
+        ["battle/tactic_freeze"] 		= {"battle/tactic_freeze", 1/15, false},
+        ["battle/tactic_freeze_shiny"] 	= {"battle/tactic_freeze_shiny", 1/15, false},
+		
+		["battle/transition_out"]       = {"battle/transition_out", 1/15, false},
+
+        ["battle/charge"]               = {"battle/charge", 1/6, true},
+
+		-- Cutscene animations
+        ["jump_ball"]           = {"ball", 1/15, true},
+		["sit"]               	= {"sit", 4/30, true},
+
+		["dance"]               = {"dance", 1/10, true},
+
+        ["pirouette"]           = {"pirouette", 4/30, true},
+    }
+
+    -- Table of sprite offsets (indexed by sprite name)
+    self.offsets = {
+        -- Movement offsets
+        ["walk/left"] = {0, 0},
+        ["walk/right"] = {0, 0},
+        ["walk/up"] = {0, 0},
+        ["walk/down"] = {0, 0},
+
+        ["walk_serious/left"] = {0, 0},
+        ["walk_serious/right"] = {0, 0},
+        ["walk_serious/up"] = {0, 0},
+        ["walk_serious/down"] = {0, 0},
+
+        ["walk_shadowed/left"] = {0, 0},
+        ["walk_shadowed/right"] = {0, 0},
+        ["walk_shadowed/up"] = {0, 0},
+        ["walk_shadowed/down"] = {0, 0},
+
+        ["slide"] = {0, 0},
+        ["slide_hurt"] = {0, 0},
+
+        -- Battle offsets
+        ["battle/idle"] = {-5, 0},
+
+        ["battle/attack"] = {-5, 1},
+        ["battle/attackready"] = {-5, 0},
+        ["battle/act"] = {-4, 0},
+        ["battle/actend"] = {-4, 0},
+        ["battle/actready"] = {-4, 0},
+        ["battle/item"] = {-4, 0},
+        ["battle/itemready"] = {-4, 0},
+        ["battle/defend"] = {-4, 0},
+        ["battle/swooned"] = {0, 0},
+
+        ["battle/defeat"] = {-3, 4},
+        ["battle/hurt"] = {-5, 0},
+
+        ["battle/transition"] = {-9, 0},
+        ["battle/intro"] = {-9, 0},
+        ["battle/victory"] = {-10, 0},
+        ["battle/transition_out"] = {-10, 0},
+		
+        ["battle/tactic_freeze"] = {-5, 0},
+        ["battle/tactic_freeze_shiny"] = {-5, 0},
+
+        ["battle/charge"] = {-9, -3},
+
+		["ball"] = {0, 18},
+
+        ["talk_to_marcy"] = {0, 13},
+        ["talk_to_marcy_reach"] = {-7, 13},
+        ["talk_to_marcy_relate"] = {-7, 13},
+
+        ["dance"] = {-4, 0},
+
+        ["pirouette"] = {-4, 0},
+
+        ["sneak/left"] = {-6, 3},
+        ["sneak/right"] = {2, 3},
+
+        --- Climbing offsets
+        ["climb/climb"] = {-4, 8},
+        ["climb/charge"] = {-4, 11},
+        ["climb/slip_left"] = {-4, 8},
+        ["climb/slip_right"] = {-4, 8},
+        ["climb/land_left"] = {-4, 8},
+        ["climb/land_right"] = {-4, 8},
+        ["climb/jump_up"] = {-4, 8},
+        ["climb/jump_left"] = {-4, 8},
+        ["climb/jump_right"] = {-4, 8},
+    }
+end
+
+return actor

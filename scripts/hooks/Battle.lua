@@ -9,6 +9,11 @@ local SOUL_COLORS = {
 }
 
 local GRID_VIEW = {x = 6, y = 84, width = 224, height = 225}
+local GRID_HEX_RADIUS = 18
+local GRID_HEX_WIDTH = math.sqrt(3) * GRID_HEX_RADIUS
+local GRID_HEX_ROW_HEIGHT = GRID_HEX_RADIUS * 1.5
+local GRID_FRONT_SPEED = 20
+local GRID_BACK_SPEED = 8
 local STRIP_Y = 405
 local PANEL_Y = 425
 local PANEL_X = 28
@@ -19,7 +24,6 @@ local CARD_AMOUNT = 2
 local CARD_GAP = 15
 local CARD_AREA_X = 250
 local CARD_AREA_WIDTH = SCREEN_WIDTH - CARD_AREA_X
-local ACTION_CARD_COST = 8
 local TENSION_REGEN = 4
 local ENEMY_FADE_SPEED = 3
 local CARD_FADE_SPEED = 4
@@ -121,7 +125,7 @@ function Battle:init()
     -- Character, not a PartyBattler, and the stock battle logic cannot operate on it.
     self.network_party = {}
     self.network_party_limit = #SOUL_COLORS
-    self.network_grid_scroll = 0
+    self.network_grid_time = 0
     self.card_bank, self.card_ids = self:createCardBank()
     self.card_amount = CARD_AMOUNT
     self.card_choices = {}
@@ -135,6 +139,7 @@ function Battle:init()
     self.card_battle_seed = next_battle.seed
     self.card_phase_rarities = next_battle.phases
     self.card_phase_total = #next_battle.phases
+    self.double_effect_active = Mod:isDoubleEffectActive()
     self.card_phase_current = 0
     self.card_phase_timer = 0
     self.card_enemy_alpha = 0
@@ -162,11 +167,29 @@ function Battle:init()
     self.network_stat_boxes = {}
     self.card_objects = {}
     self.card_resurrections = {}
+    self.all_text_serial = 0
+    self.all_text_ready = {}
+    self.all_textbox = nil
+    self.event_viewport_alpha = 0
+    self.event_token_selections = {}
+    self.event_token_pending = nil
+    self.token_selection_object = nil
+    self.battle_snapshot_transition = nil
+    self.battle_snapshot_exit_pending = false
     self.resurrection_serial = 0
     self.card_cursor_was_visible = MOUSE_VISIBLE
     self.card_os_cursor_was_visible = love.mouse.isVisible()
     self:refreshNetworkParty()
     self:refreshNetworkTokens()
+    self.rand = love.math.random(1,10)
+
+
+    if self.rand == 10 then
+        self.spr = Sprite("ui/crimegraph", 115, 60)
+        self:addChild(self.spr)
+        self.spr:setScale(2)
+        self.spr:setOrigin(0.5)
+    end
 end
 
 ---Creates the stock UI objects so Battle's state machine remains valid, but the
@@ -203,6 +226,27 @@ function Battle:keepNativePartyOffscreen()
     end
 end
 
+function Battle:getRandomBattleMusic()
+    local tracks = {}
+    for music_id in pairs(Assets.data.music or {}) do
+        if music_id:match("^battle/.+") then
+            table.insert(tracks, music_id)
+        end
+    end
+    table.sort(tracks)
+    if #tracks == 0 then
+        return self.encounter and self.encounter.music
+    end
+
+    -- Derive the choice from the synchronized battle seed so every online
+    -- player gets the same track without consuming gameplay RNG.
+    local seed = math.max(1, math.floor(
+        tonumber(self.card_battle_seed) or 1
+    ))
+    seed = (seed * 48271) % 2147483647
+    return tracks[(seed % #tracks) + 1]
+end
+
 function Battle:postInit(state, encounter)
     super.postInit(self, state, encounter)
 
@@ -211,11 +255,22 @@ function Battle:postInit(state, encounter)
     self:refreshDoorStatuses()
 
     self:positionNetworkEnemies(false)
-    self:triggerBiteForEnemy(self.enemies[1])
+    if not self:isTokenEventPhase() then
+        self:triggerBiteForEnemy(self.enemies[1])
+    end
     self:setState("NONE", "CARD_GAME")
 
-    if self.encounter.music and not self.music:isPlaying() then
-        self.music:play(self.encounter.music)
+    local battle_music = self.double_effect_active
+        and "event_double"
+        or self:getRandomBattleMusic()
+    if battle_music then
+        self.encounter.music = battle_music
+        if self.double_effect_active then
+            self.music:play(battle_music, 0)
+            self.music:fade(0.8, 0.5)
+        else
+            self.music:play(battle_music)
+        end
     end
     self.started = true
     self.card_amount = self.encounter.card_amount or self.card_amount
@@ -228,11 +283,40 @@ function Battle:postInit(state, encounter)
 end
 
 function Battle:onRemove(parent)
+    -- The stage-level snapshot intentionally survives Battle so its two
+    -- captured halves can reveal the restored overworld underneath.
+    self.battle_snapshot_transition = nil
     if not self.card_cursor_was_visible then
         Kristal.hideCursor()
     end
     love.mouse.setVisible(self.card_os_cursor_was_visible)
     super.onRemove(self, parent)
+end
+
+function Battle:onTransitionOutState()
+    super.onTransitionOutState(self)
+    if self.anotherdoor_round_forced_end then
+        -- A round ending because everybody died should reset immediately;
+        -- the slice is reserved for the last-player cash-out path.
+        self.battle_round_exit_pending = true
+        return
+    end
+    if self.battle_snapshot_transition then return end
+
+    local snapshot = SnapshotSliceTransition()
+    snapshot.layer = (Game.fader and Game.fader.layer or WORLD_LAYERS["top"]) + 1
+    snapshot.on_complete = function()
+        if Mod.post_battle_snapshot_transition == snapshot then
+            Mod.post_battle_snapshot_transition = nil
+        end
+        if snapshot.parent then
+            snapshot:remove()
+        end
+    end
+    self.battle_snapshot_transition = snapshot
+    Mod.post_battle_snapshot_transition = snapshot
+    self.battle_snapshot_exit_pending = true
+    Game.stage:addChild(snapshot)
 end
 
 function Battle:returnToWorld()
@@ -250,6 +334,12 @@ function Battle:returnToWorld()
         or (not leader and Mod:getLocalPartyNumber() == 1)
     self.phase_queue_advanced = true
     super.returnToWorld(self)
+    Mod:movePlayerToSpawn()
+    Mod:preparePostBattleEvent(
+        self.card_battle_seed,
+        self.double_effect_active,
+        not self.anotherdoor_round_forced_end
+    )
     if Mod.round_reset_pending and not Mod.round_reset_waiting_for_host then
         Mod:completeRoundReset()
     elseif not Mod:isRoundActive() then
@@ -317,7 +407,9 @@ function Battle:replacePhaseEnemy(phase_index)
     self.enemies_index = {}
     local enemy = self.encounter:addEnemy(next_enemy_id)
     self:positionNetworkEnemies(false)
-    self:triggerBiteForEnemy(enemy)
+    if self.card_phase_rarities[phase_index] ~= "event" then
+        self:triggerBiteForEnemy(enemy)
+    end
     self.enemy_beginning_positions[enemy] = world_position or {enemy.x, enemy.y}
     if world_character then
         self.enemy_world_characters[enemy] = world_character
@@ -427,6 +519,38 @@ function Battle:addPoisonStatus(amount, card_slot)
     if self.poison_status then
         self.poison_status:setStacks(stacks)
     end
+end
+
+function Battle:clearLocalStatuses()
+    Game:setFlag(BITE_FLAG, 0)
+    Game:setFlag(POISON_FLAG, 0)
+    for _, status in pairs({self.bite_status, self.poison_status}) do
+        if status then
+            status.acquiring = false
+            status:setStacks(0)
+        end
+    end
+    Mod:syncRoundState(true)
+end
+
+function Battle:clearOneLocalStatus()
+    local available = {}
+    if getStatusStacks(Game:getFlag(POISON_FLAG, 0)) > 0 then
+        table.insert(available, {flag = POISON_FLAG, object = self.poison_status})
+    end
+    if getStatusStacks(Game:getFlag(BITE_FLAG, 0)) > 0 then
+        table.insert(available, {flag = BITE_FLAG, object = self.bite_status})
+    end
+    if #available == 0 then return false end
+
+    local selected = available[love.math.random(1, #available)]
+    Game:setFlag(selected.flag, 0)
+    if selected.object then
+        selected.object.acquiring = false
+        selected.object:setStacks(0)
+    end
+    Mod:syncRoundState(true)
+    return true
 end
 
 function Battle:applyPoisonDamage()
@@ -595,6 +719,283 @@ function Battle:getNetworkMemberByKey(member_key)
             return member, index
         end
     end
+end
+
+function Battle:getNetworkSelectionKey(member)
+    return getSelectionKey(member)
+end
+
+function Battle:beginAllText(text, options)
+    self.all_text_serial = self.all_text_serial + 1
+    local serial = self.all_text_serial
+    self.all_text_ready[serial] = self.all_text_ready[serial] or {}
+    if self.all_textbox and self.all_textbox.parent then self.all_textbox:remove() end
+    self.all_textbox = AllTextbox(self, serial, text)
+    self:addChild(self.all_textbox)
+    return serial
+end
+
+function Battle:confirmAllText(serial)
+    local ready = self.all_text_ready[serial]
+    if not ready or ready.__local then return end
+    ready.__local = true
+    local gcsn = rawget(_G, "GCSN")
+    if gcsn and gcsn.sendToServer then
+        gcsn.sendToServer({command = "chat", uuid = gcsn.uuid, message = table.concat({
+            "[anotherdoor_text_ready]", tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(self.card_round), tostring(serial),
+        }, " ")})
+    end
+end
+
+function Battle:receiveAllTextReady(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then return end
+    if tonumber(data.round) ~= self.card_round then return end
+    local serial = tonumber(data.serial)
+    if not serial then return end
+    self.all_text_ready[serial] = self.all_text_ready[serial] or {}
+    local gcsn = rawget(_G, "GCSN")
+    local key = gcsn and tostring(data.uuid) == tostring(gcsn.uuid) and "__local" or tostring(data.uuid or "")
+    if key ~= "" then self.all_text_ready[serial][key] = true end
+end
+
+function Battle:isAllTextMemberReady(serial, key)
+    return self.all_text_ready[serial] and self.all_text_ready[serial][key] == true
+end
+
+function Battle:isAllTextReady(serial)
+    for _, member in ipairs(self.network_party) do
+        local key = getSelectionKey(member)
+        if member.active ~= false and not self:isAllTextMemberReady(serial, key) then return false end
+    end
+    return #self.network_party > 0
+end
+
+function Battle:closeAllText(serial)
+    if self.all_textbox and self.all_textbox.serial == serial then
+        self.all_textbox:remove()
+        self.all_textbox = nil
+    end
+end
+
+function Battle:isTokenEventPhase()
+    return self.card_phase_rarities[self.card_round] == "event"
+end
+
+function Battle:beginTokenSelectionEvent()
+    if self.poison_damage_round ~= self.card_round then
+        self.poison_damage_round = self.card_round
+        self:applyPoisonDamage()
+    end
+    if self.tension_regen_round ~= self.card_round then
+        local member = self:getLocalNetworkMember()
+        if member and member.chara and member.chara.addTension then
+            member.chara:addTension(TENSION_REGEN)
+        end
+        self.tension_regen_round = self.card_round
+    end
+    self.card_phase_current = self.card_round
+    self.card_deal_seed = Mod:getPhaseSeed(self.card_battle_seed, self.card_round)
+    self.card_choices, self.card_positions, self.card_selections = {}, {}, {}
+    self.event_token_selections = {}
+    self.event_token_pending = nil
+    self.current_battle_event = Mod:pickEventForPhase(self.card_round, {
+        seed = self.card_battle_seed,
+        phases = self.card_phase_rarities,
+    })
+    self.card_enemy_alpha, self.card_cards_alpha = 0, 0
+    self.event_viewport_alpha = 0
+    self.card_phase = "EVENT_FADE_IN"
+end
+
+function Battle:showTokenSelection()
+    if self.token_selection_object then return end
+    self.token_selection_object = TokenSelectionEvent(self, self.card_deal_seed)
+    self:addChild(self.token_selection_object)
+end
+
+function Battle:enableTokenSelection()
+    if self.token_selection_object then self.token_selection_object:setEnabled(true) end
+end
+
+function Battle:getTokenEventPromptMember()
+    local active = {}
+    for _, member in ipairs(self.network_party) do if member.active ~= false then table.insert(active, member) end end
+    if #active == 0 then return nil end
+    return active[((self.card_deal_seed or 1) % #active) + 1]
+end
+
+function Battle:chooseEventToken(token_id)
+    if self.event_token_selections.__local
+        or self.event_token_pending
+        or not Token.DEFINITIONS[token_id]
+    then
+        return
+    end
+
+    for _, selected_token in pairs(self.event_token_selections) do
+        if selected_token == token_id then
+            Assets.playSound("ui_cant_select")
+            return
+        end
+    end
+
+    local gcsn = rawget(_G, "GCSN")
+    if not self:isCardPartyOnline() or not gcsn or not gcsn.sendToServer then
+        self:commitEventTokenSelection("__local", token_id)
+        return
+    end
+
+    self.event_token_pending = token_id
+    local leader = self:getCardDealLeader()
+    if leader and leader.local_player then
+        self:receiveEventTokenClaim({
+            uuid = gcsn.uuid,
+            encounter = self.encounter and self.encounter.id or "battle",
+            round = self.card_round,
+            token = token_id,
+        })
+    else
+        gcsn.sendToServer({
+            command = "chat",
+            uuid = gcsn.uuid,
+            message = table.concat({
+                "[anotherdoor_token_claim]",
+                tostring(self.encounter and self.encounter.id or "battle"),
+                tostring(self.card_round),
+                token_id,
+            }, " "),
+        })
+    end
+end
+
+function Battle:getEventTokenKey(uuid)
+    local gcsn = rawget(_G, "GCSN")
+    if uuid == "__local"
+        or (gcsn and tostring(uuid or "") == tostring(gcsn.uuid or ""))
+    then
+        return "__local"
+    end
+    return tostring(uuid or "")
+end
+
+function Battle:isEventTokenTaken(token_id)
+    for _, selected_token in pairs(self.event_token_selections) do
+        if selected_token == token_id then return true end
+    end
+    return false
+end
+
+function Battle:commitEventTokenSelection(owner_uuid, token_id)
+    local key = self:getEventTokenKey(owner_uuid)
+    if key == "" or not Token.DEFINITIONS[token_id] then return false end
+    if self.event_token_selections[key] then
+        return self.event_token_selections[key] == token_id
+    end
+    if self:isEventTokenTaken(token_id) then return false end
+
+    self.event_token_selections[key] = token_id
+    if key == "__local" then
+        self.event_token_pending = nil
+        Mod:setToken(token_id)
+    end
+    if self.token_selection_object then
+        self.token_selection_object:onTokenPicked(token_id, key)
+    end
+    Assets.playSound("ui_select")
+    return true
+end
+
+function Battle:sendEventTokenResult(owner_uuid, token_id)
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer then return end
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_token_pick]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(self.card_round),
+            tostring(owner_uuid),
+            token_id,
+        }, " "),
+    })
+end
+
+function Battle:sendEventTokenRejection(owner_uuid, token_id)
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn or not gcsn.sendToServer then return end
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_token_reject]",
+            tostring(self.encounter and self.encounter.id or "battle"),
+            tostring(self.card_round),
+            tostring(owner_uuid),
+            token_id,
+        }, " "),
+    })
+end
+
+function Battle:receiveEventTokenClaim(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then return end
+    if tonumber(data.round) ~= self.card_round or not Token.DEFINITIONS[data.token] then return end
+    local leader = self:getCardDealLeader()
+    if self:isCardPartyOnline() and (not leader or not leader.local_player) then return end
+
+    local owner_uuid = tostring(data.uuid or "")
+    local key = self:getEventTokenKey(owner_uuid)
+    local existing = self.event_token_selections[key]
+    if existing then
+        self:sendEventTokenResult(owner_uuid, existing)
+    elseif self:isEventTokenTaken(data.token) then
+        self:sendEventTokenRejection(owner_uuid, data.token)
+    elseif self:commitEventTokenSelection(owner_uuid, data.token) then
+        self:sendEventTokenResult(owner_uuid, data.token)
+    end
+end
+
+function Battle:receiveEventTokenSelection(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then return end
+    if tonumber(data.round) ~= self.card_round or not Token.DEFINITIONS[data.token] then return end
+    if self:isCardPartyOnline()
+        and not Mod:isPartyHostPacket(data, data.sender_uuid)
+    then
+        return
+    end
+    self:commitEventTokenSelection(data.owner_uuid or data.uuid, data.token)
+end
+
+function Battle:receiveEventTokenRejection(data)
+    if data.encounter and self.encounter and data.encounter ~= self.encounter.id then return end
+    if tonumber(data.round) ~= self.card_round then return end
+    if self:isCardPartyOnline()
+        and not Mod:isPartyHostPacket(data, data.sender_uuid)
+    then
+        return
+    end
+    local gcsn = rawget(_G, "GCSN")
+    if gcsn
+        and tostring(data.owner_uuid or "") == tostring(gcsn.uuid or "")
+        and self.event_token_pending == data.token
+    then
+        self.event_token_pending = nil
+        Assets.playSound("ui_cant_select")
+    end
+end
+
+function Battle:hasEveryEventTokenSelection()
+    for _, member in ipairs(self.network_party) do
+        local key = getSelectionKey(member)
+        if member.active ~= false and not self.event_token_selections[key] then return false end
+    end
+    return #self.network_party > 0
+end
+
+function Battle:endTokenSelectionEvent()
+    if self.token_selection_object then self.token_selection_object.finished = true end
+    self.card_phase = "EVENT_FADE_OUT"
 end
 
 function Battle:getNetworkPanelX(index)
@@ -848,7 +1249,6 @@ function Battle:dealCards(amount, seed)
     local action_id = action_ids[(seed % #action_ids) + 1]
     local action_card = self.card_bank[action_id]()
     action_card.party_action = true
-    action_card.tp_cost = ACTION_CARD_COST
     action_card:setSlot(#self.card_choices + 1)
     table.insert(self.card_choices, action_card)
 
@@ -864,6 +1264,11 @@ function Battle:dealCards(amount, seed)
 end
 
 function Battle:beginCardDecisionPhase(seed)
+    if self:isTokenEventPhase() then
+        self:beginTokenSelectionEvent()
+        return
+    end
+
     local leader = self:getCardDealLeader()
     if self:isCardPartyOnline() and (not leader or not leader.local_player) and not seed then
         self.card_choices = {}
@@ -1153,6 +1558,7 @@ function Battle:resolveCardEffects()
     self.card_resolution_started = true
     self.card_phase = "RESOLVING"
     self.card_phase_timer = 0
+    self.mizzle_secret_reset = false
 
     local active_rank = 0
     local active_count = 0
@@ -1173,6 +1579,15 @@ function Battle:resolveCardEffects()
     end
 end
 
+function Battle:resetMizzleSecretAfterResolve()
+    if self.mizzle_secret_reset then return end
+    local enemy = self.enemies and self.enemies[1]
+    if enemy and enemy.id == "miss_mizzle" then
+        self.mizzle_secret_reset = true
+        Mod:setMizzleSecret(false)
+    end
+end
+
 function Battle:applyLocalCardEffect()
     if self.card_effect_resolved then return end
     self.card_effect_resolved = true
@@ -1185,11 +1600,16 @@ function Battle:applyLocalCardEffect()
         local_member.chara:addTension(-(card.tp_cost or 0))
     end
 
-    local damage = card and card:resolve(self, local_member, self.card_selections) or 0
-    if damage > 0 and self.party[1] then
-        self.party[1]:hurt(damage, true)
-    elseif damage < 0 and self.party[1] then
-        self.party[1]:heal(-damage)
+    local resolve_count = self.double_effect_active and 2 or 1
+    for _ = 1, resolve_count do
+        local damage = card
+            and card:resolve(self, local_member, self.card_selections)
+            or 0
+        if damage > 0 and self.party[1] then
+            self.party[1]:hurt(damage, true)
+        elseif damage < 0 and self.party[1] then
+            self.party[1]:heal(-damage)
+        end
     end
     self:applyLoversMatchHeal()
 end
@@ -1433,7 +1853,24 @@ function Battle:getCardAtPosition(x, y)
 end
 
 function Battle:updateCardGame()
-    if self.card_phase == "WAITING_FOR_DEAL" then
+    if self.card_phase == "EVENT_FADE_IN" then
+        self.event_viewport_alpha = math.min(1, self.event_viewport_alpha + (2.5 * DT))
+        if self.event_viewport_alpha >= 1 then
+            self.card_phase = "EVENT_CUTSCENE"
+            local cutscene = self.current_battle_event and self.current_battle_event.cutscene
+                or {"token_selection", "event"}
+            self:startCutscene(cutscene[1], cutscene[2])
+        end
+    elseif self.card_phase == "EVENT_CUTSCENE" then
+        -- The BattleCutscene drives dialogue and token selection.
+    elseif self.card_phase == "EVENT_FADE_OUT" then
+        self.event_viewport_alpha = math.max(0, self.event_viewport_alpha - (2.5 * DT))
+        if (not self.token_selection_object or self.token_selection_object.alpha <= 0) and self.event_viewport_alpha <= 0 then
+            if self.token_selection_object then self.token_selection_object:remove() end
+            self.token_selection_object = nil
+            self:advanceCardPhase()
+        end
+    elseif self.card_phase == "WAITING_FOR_DEAL" then
         local leader = self:getCardDealLeader()
         if leader and leader.local_player then
             self:beginCardDecisionPhase()
@@ -1493,6 +1930,7 @@ function Battle:updateCardGame()
         if self.card_effect_resolved
             and self.card_phase_timer >= self.card_resolution_end
         then
+            self:resetMizzleSecretAfterResolve()
             self.card_phase = "RESOLVED"
             self.card_phase_timer = 0
         end
@@ -1649,40 +2087,127 @@ function Battle:update()
     then
         self:handleLocalRoundDeath()
     end
-    self.network_grid_scroll = (self.network_grid_scroll + (20 * DT)) % 24
+    self.network_grid_time = self.network_grid_time + DT
     super.update(self)
+
+    if self.spr then
+        self.spr:setScale(2 + (love.math.random(-15, 15)/100), 2 + (love.math.random(-15, 15)/100))
+    end
+    if self.battle_round_exit_pending and Game.battle == self then
+        self.battle_round_exit_pending = false
+        self:returnToWorld()
+        return
+    end
+    if self.battle_snapshot_exit_pending and Game.battle == self then
+        self.battle_snapshot_exit_pending = false
+        self:returnToWorld()
+        return
+    end
     self:keepNativePartyOffscreen()
     self:hideStockBattleUI()
 end
 
+local function drawHexagon(x, y, radius)
+    local points = {}
+    for corner = 0, 5 do
+        local angle = math.rad((corner * 60) - 90)
+        table.insert(points, x + (math.cos(angle) * radius))
+        table.insert(points, y + (math.sin(angle) * radius))
+    end
+    love.graphics.polygon("line", points)
+end
+
+function Battle:drawHexGridLayer(offset_x, offset_y, color)
+    local wrap_y = GRID_HEX_ROW_HEIGHT * 2
+    offset_x = offset_x % GRID_HEX_WIDTH
+    offset_y = offset_y % wrap_y
+
+    Draw.setColor(color)
+    for row = -3, math.ceil(SCREEN_HEIGHT / GRID_HEX_ROW_HEIGHT) + 2 do
+        local y = (row * GRID_HEX_ROW_HEIGHT) + offset_y
+        local stagger = (row % 2) * (GRID_HEX_WIDTH / 2)
+        for column = -3, math.ceil(SCREEN_WIDTH / GRID_HEX_WIDTH) + 2 do
+            local x = (column * GRID_HEX_WIDTH) + stagger + offset_x
+            drawHexagon(x, y, GRID_HEX_RADIUS)
+        end
+    end
+end
+
 function Battle:drawNetworkGrid()
     local view = GRID_VIEW
-    local old_x, old_y, old_w, old_h = love.graphics.getScissor()
+    local time = self.network_grid_time or 0
+    local event_alpha = self.event_viewport_alpha or 0
+    local hud_alpha = 1 - event_alpha
 
-    love.graphics.setScissor(view.x, view.y, view.width, view.height)
     Draw.setColor(COLORS.black)
-    love.graphics.rectangle("fill", view.x, view.y, view.width, view.height)
+    love.graphics.rectangle("fill", 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
-    Draw.setColor(0.3, 0, 0.45, 1)
-    for x = view.x, view.x + view.width, 24 do
-        love.graphics.line(x, view.y, x, view.y + view.height)
-    end
-    for y = view.y - 24 + self.network_grid_scroll, view.y + view.height, 24 do
-        love.graphics.line(view.x, y, view.x + view.width, y)
-    end
+    love.graphics.setLineWidth(1)
+    local back_color = self.double_effect_active
+        and {0.2, 0, 0, 1}
+        or {0.13, 0, 0.2, 1}
+    local front_color = self.double_effect_active
+        and {0.5, 0.02, 0.02, 1}
+        or {0.3, 0, 0.45, 1}
+    self:drawHexGridLayer(
+        -(time * GRID_BACK_SPEED) + (GRID_HEX_WIDTH / 2),
+        -(time * GRID_BACK_SPEED) + (GRID_HEX_ROW_HEIGHT / 2),
+        back_color
+    )
+    self:drawHexGridLayer(
+        time * GRID_FRONT_SPEED,
+        time * GRID_FRONT_SPEED,
+        front_color
+    )
 
-    if old_x then
-        love.graphics.setScissor(old_x, old_y, old_w, old_h)
-    else
-        love.graphics.setScissor()
-    end
+    -- During events, the boxed battle viewport fades away and reveals the
+    -- same hex field across the entire upper battle area.
+    Draw.setColor(0, 0, 0, hud_alpha)
+    love.graphics.rectangle("fill", 0, 0, SCREEN_WIDTH, view.y)
+    love.graphics.rectangle(
+        "fill",
+        0,
+        view.y + view.height,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT - (view.y + view.height)
+    )
+    love.graphics.rectangle("fill", 0, view.y, view.x, view.height)
+    love.graphics.rectangle(
+        "fill",
+        view.x + view.width,
+        view.y,
+        SCREEN_WIDTH - (view.x + view.width),
+        view.height
+    )
 
-    Draw.setColor(COLORS.white)
+    -- The party strip always keeps an opaque black backing.
+    Draw.setColor(COLORS.black)
+    love.graphics.rectangle(
+        "fill",
+        0,
+        STRIP_Y - 27,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT - (STRIP_Y - 27)
+    )
+
+    Draw.setColor(1, 1, 1, hud_alpha)
     love.graphics.rectangle("line", view.x, view.y, view.width, view.height)
 
+    if self.rand == 10 then
+        love.graphics.setFont(Assets.getFont("main"))
+        love.graphics.printf(
+            "CRIME",
+            75,
+            5,
+            80,
+            "center"
+        )
+    end
+    
     love.graphics.setFont(Assets.getFont("small"))
     local current = self.card_phase_current > 0 and tostring(self.card_phase_current) or "?"
     local total = self.card_phase_total and tostring(self.card_phase_total) or "?"
+    Draw.setColor(1, 1, 1, hud_alpha)
     love.graphics.printf(
         "PHASE " .. current .. " / " .. total,
         view.x,
@@ -1697,6 +2222,9 @@ function Battle:setTensionVisible(visible)
 end
 
 function Battle:isTensionVisible()
+    if Mod:getToken() == "unveil" then
+        return true
+    end
     if self.tension.visible then
         return true
     end

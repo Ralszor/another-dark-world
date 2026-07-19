@@ -31,6 +31,20 @@ function CardObject:draw()
     Draw.setColor(1, 1, 1, card_alpha)
     love.graphics.setFont(Assets.getFont("tenna", 8)); love.graphics.printf(card:getName(), 8, 14, self.width - 8, "center")
     love.graphics.setFont(Assets.getFont("main", 16)); love.graphics.printf(card:getEffect(), 3, math.floor(self.height / 2), self.width - 5, "center")
+    local tp_cost = tonumber(card.tp_cost)
+    if card.party_action and tp_cost and tp_cost > 0 then
+        local font = Assets.getFont("tenna", 8)
+        love.graphics.setFont(font)
+        local tp_color = PALETTE["tension_fill"] or COLORS.orange or COLORS.white
+        Draw.setColor(tp_color[1], tp_color[2], tp_color[3], card_alpha)
+        love.graphics.printf(
+            "TP " .. tostring(math.floor(tp_cost)),
+            0,
+            self.height - font:getHeight() - 4,
+            self.width,
+            "center"
+        )
+    end
     if card.party_action then
         local bx, by = (self.width - ACTION_BOX_WIDTH) / 2, self.height - 1
         Draw.setColor(0, 0, 0, alpha); love.graphics.rectangle("fill", bx, by, ACTION_BOX_WIDTH, ACTION_BOX_HEIGHT, 3, 3)

@@ -1,8 +1,10 @@
-local PHASE_WEIGHTS = {
-    {rarity = "common", weight = 80},
-    {rarity = "uncommon", weight = 10},
-    {rarity = "rare", weight = 5},
-    {rarity = "event", weight = 5},
+local EVENT_PHASE_CHANCE = 15
+local PHASE_POOL_VERSION = 3
+local ENEMY_RARITY_WEIGHTS = {
+    {rarity = "common", weight = 65},
+    {rarity = "uncommon", weight = 15},
+    {rarity = "rare", weight = 10},
+    {rarity = "event_enemy", weight = 10},
 }
 
 local VALID_RARITIES = {
@@ -10,29 +12,57 @@ local VALID_RARITIES = {
     uncommon = true,
     rare = true,
     event = true,
+    event_enemy = true,
 }
 
 local NEXT_BATTLE_FLAG = "another_door_next_battle"
 local MONEY_REWARD_SEED_FLAG = "another_door_money_reward_seed"
 local ROUND_TOTAL_FLAG = "another_door_round_total"
+local ROUND_NUMBER_FLAG = "another_door_round_number"
 local ROUND_ACTIVE_FLAG = "another_door_round_active"
 local TOKEN_FLAG = "another_door_token"
 local REFUSED_USED_FLAG = "another_door_refused_used"
 local BITE_STATUS_FLAG = "anotherdoor_bite_status"
 local POISON_STATUS_FLAG = "anotherdoor_poison_status"
+local MIZZLE_SECRET_FLAG = "another_door_mizzle_secret"
+local DOUBLE_EFFECT_FLAG = "another_door_double_effect"
+local DOUBLE_EFFECT_MUSIC = "event_double"
+local DOUBLE_EFFECT_WORLD_VOLUME = 0.5
 local MAX_PHASES = 6
 local SEED_MODULUS = 2147483647
 local SEED_MULTIPLIER = 48271
 
+local function getRawOnlinePartyNumber(gcsn, uuid)
+    if not gcsn then return nil end
+    uuid = tostring(uuid or "")
+    local local_uuid = tostring(gcsn.uuid or "")
+    if uuid == local_uuid then
+        if tonumber(gcsn.party_number) then return tonumber(gcsn.party_number) end
+        local known = gcsn.known_players and gcsn.known_players[gcsn.uuid]
+        if known and tonumber(known.party_number) then return tonumber(known.party_number) end
+        local player = Game and Game.world and Game.world.player
+        if player and tonumber(player.party_number) then return tonumber(player.party_number) end
+    end
+    local sources = {
+        gcsn.party_members,
+        gcsn.other_players,
+        gcsn.other_battlers,
+        gcsn.known_players,
+    }
+    for _, source in ipairs(sources) do
+        local player = source and source[uuid]
+        if tonumber(player) then
+            return tonumber(player)
+        elseif type(player) == "table" and tonumber(player.party_number) then
+            return tonumber(player.party_number)
+        end
+    end
+end
+
 function Mod:getLocalPartyNumber()
     local gcsn = rawget(_G, "GCSN")
-    if gcsn and tonumber(gcsn.party_number) then
-        return tonumber(gcsn.party_number)
-    end
-    local known = gcsn and gcsn.known_players and gcsn.known_players[gcsn.uuid]
-    if known and tonumber(known.party_number) then
-        return tonumber(known.party_number)
-    end
+    local raw_number = gcsn and getRawOnlinePartyNumber(gcsn, gcsn.uuid)
+    if raw_number then return raw_number end
 
     local battler = Game and Game.battle and Game.battle.party
         and Game.battle.party[1]
@@ -40,8 +70,10 @@ function Mod:getLocalPartyNumber()
         return tonumber(battler.party_number)
     end
 
-    local player = Game and Game.world and Game.world.player
-    return player and tonumber(player.party_number)
+    if gcsn and gcsn.uuid then
+        return self:getOnlinePartyIndex(gcsn.uuid)
+    end
+    return nil
 end
 
 function Mod:isLocalPartyHost()
@@ -63,6 +95,24 @@ function Mod:getLocalMoney()
     return math.max(0, math.floor(tonumber(Game.money) or 0))
 end
 
+function Mod:onKeyPressed(key)
+
+    if key == "t" then
+        Game.world.timer:script(function (wait)
+        Assets.playSound("splat")
+        local spr = Sprite("taunt")
+        spr:setOrigin(0.5)
+        spr:setScale(2)
+        spr.x, spr.y = Game.world.player.x, Game.world.player.y-20
+        Game.world:addChild(spr)
+        spr.layer = Game.world.player.layer - 0.01
+        Game.world.player:setSprite("splat")
+        wait(0.5)
+        spr:remove()
+        Game.world.player:resetSprite()
+        end)
+    end
+end
 function Mod:addLocalMoney(amount)
     amount = tonumber(amount) or 0
     if amount > 0 and self:getToken() == "prophet" then
@@ -155,7 +205,7 @@ function Mod:updateSpectating()
         if a.party_number == b.party_number then return a.uuid < b.uuid end
         return a.party_number < b.party_number
     end)
-    local local_number = tonumber(self:getLocalPartyNumber()) or 0
+    local local_number = tonumber((self:getLocalPartyNumber())) or 0
     local target
     for _, candidate in ipairs(candidates) do
         if candidate.party_number > local_number then
@@ -227,30 +277,51 @@ function Mod:getRoundTotal()
     return math.max(0, math.floor(tonumber(Game:getFlag(ROUND_TOTAL_FLAG, 0)) or 0))
 end
 
+function Mod:addTotal(amount, sync)
+    amount = math.max(0, math.floor(tonumber(amount) or 1))
+    local total = self:getRoundTotal() + amount
+    Game:setFlag(ROUND_TOTAL_FLAG, total)
+    if sync ~= false then self:syncRoundState(true) end
+    return total
+end
+
+function Mod:setTotal(value, sync)
+    value = math.max(0, math.floor(tonumber(value) or 0))
+    Game:setFlag(ROUND_TOTAL_FLAG, value)
+    if sync ~= false then self:syncRoundState(true) end
+    return value
+end
+
+function Mod:getRound()
+    return math.max(1, math.floor(tonumber(
+        Game:getFlag(ROUND_NUMBER_FLAG, 1)
+    ) or 1))
+end
+
 function Mod:isRoundActive()
     return Game:getFlag(ROUND_ACTIVE_FLAG, true) ~= false
 end
 
 function Mod:addRound(amount, sync)
     amount = math.max(0, math.floor(tonumber(amount) or 1))
-    local total = self:getRoundTotal() + amount
-    Game:setFlag(ROUND_TOTAL_FLAG, total)
+    local round = self:getRound() + amount
+    Game:setFlag(ROUND_NUMBER_FLAG, round)
     if sync ~= false then
         self:syncRoundState(true)
     end
-    return total
+    return round
 end
 
 function Mod:setRound(value, sync)
-    value = math.max(0, math.floor(tonumber(value) or 0))
-    Game:setFlag(ROUND_TOTAL_FLAG, value)
+    value = math.max(1, math.floor(tonumber(value) or 1))
+    Game:setFlag(ROUND_NUMBER_FLAG, value)
     if sync ~= false then
         self:syncRoundState(true)
     end
     return value
 end
 
-function Mod:broadcastRoundReset()
+function Mod:broadcastRoundReset(target_round)
     local gcsn = rawget(_G, "GCSN")
     if not gcsn or not gcsn.sendToServer or not self:isLocalPartyHost() then
         return
@@ -258,27 +329,32 @@ function Mod:broadcastRoundReset()
     gcsn.sendToServer({
         command = "chat",
         uuid = gcsn.uuid,
-        message = "[anotherdoor_round_reset]",
+        message = "[anotherdoor_round_reset] " .. tostring(
+            target_round or self.round_reset_target or (self:getRound() + 1)
+        ),
     })
 end
 
-function Mod:requestRoundReset(broadcast, wait_for_host)
+function Mod:requestRoundReset(broadcast, wait_for_host, defer_completion)
     if self.round_reset_pending then
         if wait_for_host ~= true then
             self.round_reset_waiting_for_host = false
-            if not Game.battle then self:completeRoundReset() end
+            if not Game.battle and not defer_completion then
+                self:completeRoundReset()
+            end
         end
         return
     end
     self.round_reset_pending = true
     self.round_reset_waiting_for_host = wait_for_host == true
+    self.round_reset_target = self.round_reset_target or (self:getRound() + 1)
     self.round_over = true
     if broadcast ~= false then
         self:broadcastRoundReset()
     end
     if Game.battle and Game.battle.forceAnotherDoorRoundEnd then
         Game.battle:forceAnotherDoorRoundEnd()
-    elseif not self.round_reset_waiting_for_host then
+    elseif not self.round_reset_waiting_for_host and not defer_completion then
         self:completeRoundReset()
     end
 end
@@ -300,7 +376,8 @@ function Mod:resetRound(broadcast)
         self:requestRoundReset(broadcast)
         return 0
     end
-    Game:setFlag(ROUND_TOTAL_FLAG, 0)
+    local next_round = self.round_reset_target or (self:getRound() + 1)
+    self:setRound(next_round, false)
     Game:setFlag(ROUND_ACTIVE_FLAG, true)
     Game:setFlag(TOKEN_FLAG, "heart")
     Game:setFlag(REFUSED_USED_FLAG, false)
@@ -313,12 +390,14 @@ function Mod:resetRound(broadcast)
     self.round_over = false
     self.round_reset_pending = false
     self.round_reset_waiting_for_host = false
+    self.round_reset_target = nil
     self.spectating = false
     self.spectator_fade_timer = nil
     self.lover_partner_uuid = nil
     self.lover_partner_triggered = nil
-    if Game.party and Game.party[1] then
-        local member = Game.party[1]
+    for _, member in pairs(Game.party_data or {}) do
+        local stats = member:getBaseStats(false)
+        stats.health = 100
         member.active = true
         member.token_id = "heart"
         member.anotherdoor_resurrecting = nil
@@ -329,8 +408,15 @@ function Mod:resetRound(broadcast)
         Game.world:setCameraTarget(nil)
         if Game.world.player then Game.world.player.alpha = 1 end
     end
+    local can_advance = not self:isPartyOnline() or self:isLocalPartyHost()
+    if can_advance then
+        self:advancePhaseQueue()
+        if rawget(_G, "GCSN") then
+            self:syncNextBattleFlag(true, true)
+        end
+    end
     self:syncRoundState(true)
-    if broadcast ~= false then self:broadcastRoundReset() end
+    if broadcast ~= false then self:broadcastRoundReset(next_round) end
     return 0
 end
 
@@ -416,7 +502,7 @@ function Mod:syncRoundState(force)
     })
 end
 
-function Mod:areAllRoundPlayersInactive()
+function Mod:areAllRoundPlayersInactive(defer_completion)
     if self:isRoundActive() then return false end
     local gcsn = rawget(_G, "GCSN")
     for uuid in pairs(gcsn and gcsn.party_members or {}) do
@@ -428,7 +514,11 @@ function Mod:areAllRoundPlayersInactive()
     end
     self.round_over = true
     local has_authority = not self:isPartyOnline() or self:isLocalPartyHost()
-    self:requestRoundReset(has_authority, not has_authority)
+    self:requestRoundReset(
+        has_authority,
+        not has_authority,
+        defer_completion == true
+    )
     return true
 end
 
@@ -509,6 +599,117 @@ function Mod:areDoorPlayersReady(seed)
     return true
 end
 
+function Mod:markIntroReady(uuid, actor_id)
+    self.intro_ready = self.intro_ready or {}
+    self.intro_ready[tostring(uuid or "__local")] = tostring(actor_id or "")
+end
+
+function Mod:syncIntroReady(actor_id, force)
+    local gcsn = rawget(_G, "GCSN")
+    local uuid = gcsn and gcsn.uuid or "__local"
+    self:markIntroReady(uuid, actor_id)
+    if not gcsn or not gcsn.sendToServer then return end
+    self.intro_ready_sync_timer = (self.intro_ready_sync_timer or 0) + DT
+    if not force and self.intro_ready_sync_timer < 0.25 then return end
+    self.intro_ready_sync_timer = 0
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = "[anotherdoor_intro_ready] " .. tostring(actor_id),
+    })
+end
+
+function Mod:areIntroPlayersReady()
+    local gcsn = rawget(_G, "GCSN")
+    local local_key = gcsn and gcsn.uuid
+        and tostring(gcsn.uuid) or "__local"
+    if not self.intro_ready or not self.intro_ready[local_key] then return false end
+    local roster = self:getOnlinePartyRoster()
+    if #roster <= 1 then return true end
+    for _, player in ipairs(roster) do
+        if player.uuid ~= local_key and not self.intro_ready[player.uuid] then
+            return false
+        end
+    end
+    return true
+end
+
+function Mod:getOnlinePartyRoster()
+    local gcsn = rawget(_G, "GCSN")
+    if not gcsn then return {{uuid = "__local", index = 1}} end
+    local uuids = {[tostring(gcsn.uuid or "__local")] = true}
+    for uuid in pairs(gcsn.party_members or {}) do
+        local remote = gcsn.other_players and gcsn.other_players[uuid]
+        if remote and remote.parent then
+            uuids[tostring(uuid)] = true
+        end
+    end
+    local roster = {}
+    for uuid in pairs(uuids) do
+        local state = self.remote_round_states and self.remote_round_states[uuid]
+        table.insert(roster, {
+            uuid = uuid,
+            party_number = getRawOnlinePartyNumber(gcsn, uuid)
+                or tonumber(state and state.party_number),
+        })
+    end
+    table.sort(roster, function(a, b)
+        local a_number = a.party_number or math.huge
+        local b_number = b.party_number or math.huge
+        if a_number == b_number then return a.uuid < b.uuid end
+        return a_number < b_number
+    end)
+    for index, player in ipairs(roster) do player.index = index end
+    return roster
+end
+
+function Mod:getOnlinePartyIndex(uuid)
+    uuid = tostring(uuid or "__local")
+    for _, player in ipairs(self:getOnlinePartyRoster()) do
+        if player.uuid == uuid then return player.index end
+    end
+    return 1
+end
+
+function Mod:getPartyNumberForUUID(uuid)
+    return self:getOnlinePartyIndex(uuid)
+end
+
+function Mod:markIntroHighlight(uuid, actor_id, party_number)
+    self.intro_highlights = self.intro_highlights or {}
+    uuid = tostring(uuid or "__local")
+    self.intro_highlights[uuid] = {
+        actor_id = tostring(actor_id or ""),
+        party_number = self:getOnlinePartyIndex(uuid)
+            or tonumber(party_number)
+            or 1,
+    }
+end
+
+function Mod:syncIntroHighlight(actor_id, force)
+    local gcsn = rawget(_G, "GCSN")
+    local uuid = gcsn and gcsn.uuid or "__local"
+    local party_number = self:getOnlinePartyIndex(uuid)
+    self:markIntroHighlight(uuid, actor_id, party_number)
+    if not gcsn or not gcsn.sendToServer then return end
+    self.intro_highlight_sync_timer = (self.intro_highlight_sync_timer or 0) + DT
+    if not force and self.intro_highlight_sync_timer < 0.15 then return end
+    self.intro_highlight_sync_timer = 0
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = table.concat({
+            "[anotherdoor_intro_highlight]",
+            tostring(actor_id),
+            tostring(party_number),
+        }, " "),
+    })
+end
+
+function Mod:getIntroHighlights()
+    return self.intro_highlights or {}
+end
+
 function Mod:isPartyHostPacket(player, uuid)
     uuid = tostring(uuid or player and player.uuid or "")
     if self.party_host_uuid
@@ -567,8 +768,216 @@ function Mod:syncNextBattleFlag(force, leader_override)
         command = "chat",
         uuid = gcsn.uuid,
         message = "[anotherdoor_next_battle] "
-            .. tostring(self:getNextBattle().seed),
+            .. tostring(self:getNextBattle().seed)
+            .. " "
+            .. (self:isMizzleSecretActive() and "1" or "0")
+            .. " "
+            .. tostring(self:getDoubleEffectBattles()),
     })
+end
+
+function Mod:isMizzleSecretActive()
+    return Game:getFlag(MIZZLE_SECRET_FLAG, false) == true
+end
+
+function Mod:setMizzleSecret(active, sync)
+    active = active == true
+    Game:setFlag(MIZZLE_SECRET_FLAG, active)
+    if sync ~= false then
+        self:syncNextBattleFlag(true)
+    end
+    return active
+end
+
+function Mod:getDoubleEffectBattles()
+    local remaining = Game:getFlag(DOUBLE_EFFECT_FLAG, 0)
+    -- Migrate saves made while this flag was a boolean.
+    if remaining == true then return 1 end
+    return math.max(0, math.floor(tonumber(remaining) or 0))
+end
+
+function Mod:isDoubleEffectActive()
+    return self:getDoubleEffectBattles() > 0
+end
+
+function Mod:setDoubleEffectBattles(remaining, sync)
+    remaining = math.max(0, math.floor(tonumber(remaining) or 0))
+    Game:setFlag(DOUBLE_EFFECT_FLAG, remaining)
+    if sync ~= false then self:syncNextBattleFlag(true) end
+    return remaining
+end
+
+function Mod:setDoubleEffectActive(active, sync)
+    return self:setDoubleEffectBattles(active == true and 1 or 0, sync)
+end
+
+function Mod:pickPostBattleEvent(seed)
+    seed = math.max(1, math.floor(tonumber(seed) or 1))
+    local roll = ((seed * SEED_MULTIPLIER) % SEED_MODULUS) % 100
+    if roll < 10 then return "double_effect" end
+end
+
+function Mod:preparePostBattleEvent(seed, completed_double_effect, allow_roll)
+    if completed_double_effect then
+        self:setDoubleEffectBattles(
+            self:getDoubleEffectBattles() - 1,
+            false
+        )
+    end
+    self.pending_post_battle_event = nil
+    if allow_roll == false then return end
+    -- Do not reroll or reannounce the event while its current run is active.
+    if self:isDoubleEffectActive() then return end
+
+    local event_id = self:pickPostBattleEvent(seed)
+    if event_id == "double_effect" then
+        seed = math.max(1, math.floor(tonumber(seed) or 1))
+        local duration_roll = (seed * SEED_MULTIPLIER) % SEED_MODULUS
+        local duration = 2 + (math.floor(duration_roll / 100) % 4)
+        self:setDoubleEffectBattles(duration, false)
+        self.pending_post_battle_event = {
+            id = event_id,
+            seed = seed,
+            duration = duration,
+        }
+    end
+end
+
+function Mod:runPendingPostBattleEvent(cutscene)
+    local event = self.pending_post_battle_event
+    if not event then return false end
+    self.pending_post_battle_event = nil
+    local transition = self.post_battle_snapshot_transition
+    if transition and not transition:isDone() then
+        cutscene:wait(function() return transition:isDone() end)
+    end
+    self.post_battle_snapshot_transition = nil
+    local callback = Registry.getWorldCutscene("post_battle", event.id)
+    if callback then
+        callback(cutscene, event.seed, event.duration)
+        return true
+    end
+    return false
+end
+
+function Mod:startPendingPostBattleEvent()
+    local event = self.pending_post_battle_event
+    local transition = self.post_battle_snapshot_transition
+    if not event
+        or not Game.world
+        or Game.world:hasCutscene()
+        or Game.battle
+        or (transition and not transition:isDone())
+    then
+        return false
+    end
+    self.post_battle_snapshot_transition = nil
+    self.pending_post_battle_event = nil
+    Game.world:startCutscene(
+        "post_battle",
+        event.id,
+        event.seed,
+        event.duration
+    )
+    return true
+end
+
+function Mod:updateDoubleEffectWorldMusic()
+    local world = Game.world
+    if not world or not world.music or Game.battle then return end
+
+    local music = world.music
+    if self:isDoubleEffectActive() then
+        local transition = self.post_battle_snapshot_transition
+        if not self.double_effect_world_music_active
+            and transition
+            and not transition:isDone()
+        then
+            return
+        end
+        if music.current ~= DOUBLE_EFFECT_MUSIC then
+            music:play(DOUBLE_EFFECT_MUSIC, 0)
+            music:fade(DOUBLE_EFFECT_WORLD_VOLUME, 0.5)
+        end
+        self.double_effect_world_music_active = true
+        return
+    end
+
+    if not self.double_effect_world_music_active then return end
+    self.double_effect_world_music_active = false
+
+    local map_music = world.map and world.map.music
+    local music_id, volume, pitch = map_music, 1, 1
+    if type(map_music) == "table" then
+        music_id = map_music[1]
+        volume = map_music[2] or volume
+        pitch = map_music[3] or pitch
+    end
+    if music_id and music_id ~= "" then
+        music:play(music_id, 0, pitch)
+        music:fade(volume, 0.5)
+    else
+        music:fade(0, 0.5, function(current) current:stop() end)
+    end
+end
+
+function Mod:movePlayerToSpawn()
+    local world = Game.world
+    if not world or not world.player or not world.map then return end
+    local x, y, marker = world.map:getMarker("spawn")
+    if marker then world.player:setPosition(x, y) end
+end
+
+function Mod:markWorldTextReady(sync_id, uuid)
+    sync_id = tostring(sync_id or "")
+    if sync_id == "" then return end
+    self.world_text_ready = self.world_text_ready or {}
+    self.world_text_ready[sync_id] = self.world_text_ready[sync_id] or {}
+    self.world_text_ready[sync_id][tostring(uuid or "__local")] = true
+end
+
+function Mod:syncWorldTextReady(sync_id, force)
+    local gcsn = rawget(_G, "GCSN")
+    local uuid = gcsn and gcsn.uuid or "__local"
+    self:markWorldTextReady(sync_id, uuid)
+    if not gcsn or not gcsn.sendToServer then return end
+    self.world_text_sync_timers = self.world_text_sync_timers or {}
+    local timer = (self.world_text_sync_timers[sync_id] or 0) + DT
+    self.world_text_sync_timers[sync_id] = timer
+    if not force and timer < 0.25 then return end
+    self.world_text_sync_timers[sync_id] = 0
+    gcsn.sendToServer({
+        command = "chat",
+        uuid = gcsn.uuid,
+        message = "[anotherdoor_world_text_ready] " .. tostring(sync_id),
+    })
+end
+
+function Mod:areWorldTextPlayersReady(sync_id)
+    local ready = self.world_text_ready and self.world_text_ready[sync_id] or {}
+    local gcsn = rawget(_G, "GCSN")
+    local local_uuid = gcsn and gcsn.uuid
+        and tostring(gcsn.uuid)
+        or "__local"
+    if not ready[local_uuid] then return false end
+    if not self:isPartyOnline() then return true end
+    for _, player in ipairs(self:getOnlinePartyRoster()) do
+        local state = self.remote_round_states
+            and self.remote_round_states[player.uuid]
+        if (not state or state.active)
+            and not ready[player.uuid]
+        then
+            return false
+        end
+    end
+    return true
+end
+
+function Mod:clearWorldTextReady(sync_id)
+    if self.world_text_ready then self.world_text_ready[sync_id] = nil end
+    if self.world_text_sync_timers then
+        self.world_text_sync_timers[sync_id] = nil
+    end
 end
 
 function Mod:normalizeRarity(rarity)
@@ -578,14 +987,30 @@ function Mod:normalizeRarity(rarity)
 end
 
 function Mod:rollPhaseRarity()
-    return self:getRarityForRoll(love.math.random(1, 100))
+    return self:getRarityForRoll(
+        love.math.random(1, 100),
+        love.math.random(1, 100)
+    )
 end
 
-function Mod:getRarityForRoll(roll)
+function Mod:getRarityForRoll(phase_roll, enemy_roll)
+    if phase_roll <= EVENT_PHASE_CHANCE then
+        return "event"
+    end
+
+    enemy_roll = enemy_roll or phase_roll
     local total = 0
-    for _, entry in ipairs(PHASE_WEIGHTS) do
-        total = total + entry.weight
-        if roll <= total then return entry.rarity end
+    for _, entry in ipairs(ENEMY_RARITY_WEIGHTS) do
+        local weight = entry.weight
+        if self:isMizzleSecretActive() then
+            if entry.rarity == "common" then
+                weight = weight - 2
+            elseif entry.rarity == "event_enemy" then
+                weight = weight + 2
+            end
+        end
+        total = total + weight
+        if enemy_roll <= total then return entry.rarity end
     end
     return "common"
 end
@@ -597,10 +1022,17 @@ function Mod:createBattleFromSeed(seed)
     local phase_seed = seed
     for index = 1, phase_count do
         phase_seed = (phase_seed * SEED_MULTIPLIER) % SEED_MODULUS
-        phases[index] = self:getRarityForRoll((phase_seed % 100) + 1)
+        phases[index] = self:getRarityForRoll(
+            (phase_seed % 100) + 1,
+            (math.floor(phase_seed / 100) % 100) + 1
+        )
     end
 
-    local next_battle = {seed = seed, phases = phases}
+    local next_battle = {
+        seed = seed,
+        phases = phases,
+        pool_version = PHASE_POOL_VERSION,
+    }
     Game:setFlag(NEXT_BATTLE_FLAG, next_battle)
     return next_battle
 end
@@ -614,7 +1046,10 @@ end
 function Mod:setNextBattleSeed(seed)
     seed = math.max(1, math.floor(tonumber(seed) or 1) % SEED_MODULUS)
     local current = Game:getFlag(NEXT_BATTLE_FLAG)
-    if type(current) == "table" and current.seed == seed then
+    if type(current) == "table"
+        and current.seed == seed
+        and current.pool_version == PHASE_POOL_VERSION
+    then
         return current
     end
     return self:createBattleFromSeed(seed)
@@ -625,14 +1060,20 @@ function Mod:getNextBattle()
     if type(next_battle) == "table"
         and type(next_battle.seed) == "number"
         and type(next_battle.phases) == "table"
+        and next_battle.pool_version == PHASE_POOL_VERSION
         and #next_battle.phases == ((next_battle.seed % MAX_PHASES) + 1)
     then
         for _, rarity in ipairs(next_battle.phases) do
             if not VALID_RARITIES[rarity] then
-                return self:generateNextBattle()
+                return self:createBattleFromSeed(next_battle.seed)
             end
         end
         return next_battle
+    end
+    if type(next_battle) == "table"
+        and type(next_battle.seed) == "number"
+    then
+        return self:createBattleFromSeed(next_battle.seed)
     end
     return self:generateNextBattle()
 end
@@ -656,13 +1097,25 @@ end
 function Mod:getEnemyPools()
     if self.enemy_pools then return self.enemy_pools end
 
-    local pools = {common = {}, uncommon = {}, rare = {}, event = {}}
+    local pools = {
+        common = {},
+        uncommon = {},
+        rare = {},
+        event_enemy = {},
+    }
     for path in pairs(self.info.script_chunks or {}) do
         local id = path:match("^scripts/battle/enemies/(.+)$")
-        if id and Registry.getEnemy(id) then
+        if id
+            and id ~= "event_anchor"
+            and id ~= "miss_mizzle"
+            and Registry.getEnemy(id)
+        then
             local success, enemy = pcall(Registry.createEnemy, id)
             if success and enemy then
                 local rarity = self:normalizeRarity(enemy.rarity)
+                -- "event" used to be an enemy rarity. Keep third-party or stale
+                -- enemy definitions compatible with its new name.
+                if rarity == "event" then rarity = "event_enemy" end
                 table.insert(pools[rarity], id)
             end
         end
@@ -702,12 +1155,45 @@ function Mod:pickEnemyForPhase(index, fallback, next_battle)
     next_battle = next_battle or self:getNextBattle()
     index = math.max(1, math.floor(tonumber(index) or 1))
     local rarity = next_battle.phases[index] or "common"
+    -- Event phases use an inert anchor, never an enemy from a rarity pool.
+    if rarity == "event" then return "event_anchor" end
     local seed = self:getPhaseSeed(next_battle.seed, index)
-    return self:pickEnemyForRarity(rarity, fallback, seed)
+    local enemy_id = self:pickEnemyForRarity(rarity, fallback, seed)
+    if self:isMizzleSecretActive() and enemy_id == "watercooler" then
+        return "miss_mizzle"
+    end
+    return enemy_id
 end
 
 function Mod:pickEnemyForCurrentPhase(fallback)
     return self:pickEnemyForPhase(1, fallback)
+end
+
+function Mod:getEventPool()
+    if self.event_pool then return self.event_pool end
+    local pool = {}
+    for path in pairs(self.info.script_chunks or {}) do
+        if path:match("^scripts/battle/events/[^/]+$") then
+            local success, event = pcall(modRequire, path:gsub("/", "."))
+            if success and type(event) == "table" and type(event.id) == "string" then
+                pool[event.id] = event
+            else
+                Kristal.Console:warn("Skipping invalid battle event: " .. path)
+            end
+        end
+    end
+    self.event_pool = pool
+    return pool
+end
+
+function Mod:pickEventForPhase(index, next_battle)
+    next_battle = next_battle or self:getNextBattle()
+    local events, ids = self:getEventPool(), {}
+    for id in pairs(events) do table.insert(ids, id) end
+    table.sort(ids)
+    if #ids == 0 then return nil end
+    local seed = self:getPhaseSeed(next_battle.seed, index)
+    return events[ids[(seed % #ids) + 1]]
 end
 
 function Mod:processNetworkPlayer(player, uuid)
@@ -718,6 +1204,12 @@ function Mod:processNetworkPlayer(player, uuid)
         and self:isPartyHostPacket(player, uuid)
     then
         self:setNextBattleSeed(player.anotherdoor_next_battle_seed)
+    end
+
+    if player.anotherdoor_round_number
+        and self:isPartyHostPacket(player, uuid)
+    then
+        self:setRound(player.anotherdoor_round_number, false)
     end
 
     if player.anotherdoor_round_total ~= nil then
@@ -811,6 +1303,7 @@ function Mod:installNetworkHook()
         then
             local party = Game.party and Game.party[1]
             message.anotherdoor_round_total = Mod:getRoundTotal()
+            message.anotherdoor_round_number = Mod:getRound()
             message.anotherdoor_round_active = Mod:isRoundActive() and 1 or 0
             message.anotherdoor_round_actor = party and party.id
             message.anotherdoor_token = Mod:getToken()
@@ -864,6 +1357,78 @@ function Mod:installNetworkHook()
                             encounter = choice_encounter,
                             round = choice_round,
                             choice = choice,
+                        })
+                    end
+                    return
+                end
+
+                local text_encounter, text_round, text_serial = message:match(
+                    "^%[anotherdoor_text_ready%]%s+(%S+)%s+(%d+)%s+(%d+)$"
+                )
+                if text_encounter then
+                    if Game.battle and Game.battle.receiveAllTextReady then
+                        Game.battle:receiveAllTextReady({
+                            uuid = data.uuid,
+                            encounter = text_encounter,
+                            round = text_round,
+                            serial = text_serial,
+                        })
+                    end
+                    return
+                end
+
+                local world_text_id = message:match(
+                    "^%[anotherdoor_world_text_ready%]%s+(%S+)$"
+                )
+                if world_text_id then
+                    Mod:markWorldTextReady(world_text_id, data.uuid)
+                    return
+                end
+
+                local claim_encounter, claim_round, claim_token = message:match(
+                    "^%[anotherdoor_token_claim%]%s+(%S+)%s+(%d+)%s+(%S+)$"
+                )
+                if claim_encounter then
+                    if Game.battle and Game.battle.receiveEventTokenClaim then
+                        Game.battle:receiveEventTokenClaim({
+                            uuid = data.uuid,
+                            encounter = claim_encounter,
+                            round = claim_round,
+                            token = claim_token,
+                        })
+                    end
+                    return
+                end
+
+                local token_encounter, token_round, token_owner,
+                    token_id = message:match(
+                    "^%[anotherdoor_token_pick%]%s+(%S+)%s+(%d+)%s+(%S+)%s+(%S+)$"
+                )
+                if token_encounter then
+                    if Game.battle and Game.battle.receiveEventTokenSelection then
+                        Game.battle:receiveEventTokenSelection({
+                            sender_uuid = data.uuid,
+                            owner_uuid = token_owner,
+                            encounter = token_encounter,
+                            round = token_round,
+                            token = token_id,
+                        })
+                    end
+                    return
+                end
+
+                local reject_encounter, reject_round, reject_owner,
+                    reject_token = message:match(
+                    "^%[anotherdoor_token_reject%]%s+(%S+)%s+(%d+)%s+(%S+)%s+(%S+)$"
+                )
+                if reject_encounter then
+                    if Game.battle and Game.battle.receiveEventTokenRejection then
+                        Game.battle:receiveEventTokenRejection({
+                            sender_uuid = data.uuid,
+                            owner_uuid = reject_owner,
+                            encounter = reject_encounter,
+                            round = reject_round,
+                            token = reject_token,
                         })
                     end
                     return
@@ -938,6 +1503,26 @@ function Mod:installNetworkHook()
                     return
                 end
 
+                local intro_actor = message:match(
+                    "^%[anotherdoor_intro_ready%]%s+(%S+)$"
+                )
+                if intro_actor then
+                    Mod:markIntroReady(data.uuid, intro_actor)
+                    return
+                end
+
+                local highlight_actor, highlight_party = message:match(
+                    "^%[anotherdoor_intro_highlight%]%s+(%S+)%s+(%d+)$"
+                )
+                if highlight_actor then
+                    Mod:markIntroHighlight(
+                        data.uuid,
+                        highlight_actor,
+                        highlight_party
+                    )
+                    return
+                end
+
                 local round_total, round_active, round_money,
                     round_health, round_max_health, round_tension,
                     round_tension_max, round_bite, round_poison,
@@ -973,16 +1558,26 @@ function Mod:installNetworkHook()
                     return
                 end
 
-                if message == "[anotherdoor_round_reset]" then
+                local reset_round = message:match(
+                    "^%[anotherdoor_round_reset%]%s+(%d+)$"
+                )
+                if reset_round or message == "[anotherdoor_round_reset]" then
                     if Mod:isPartyHostPacket(data, data.uuid) then
+                        Mod.round_reset_target = tonumber(reset_round)
+                            or (Mod:getRound() + 1)
                         Mod:requestRoundReset(false, false)
                     end
                     return
                 end
 
-                local next_seed = message:match(
-                    "^%[anotherdoor_next_battle%]%s+(%d+)%s+(%d+)$"
+                local next_seed, mizzle_secret, double_effect = message:match(
+                    "^%[anotherdoor_next_battle%]%s+(%d+)%s+(%d+)%s+(%d+)$"
                 )
+                if not next_seed then
+                    next_seed, mizzle_secret = message:match(
+                    "^%[anotherdoor_next_battle%]%s+(%d+)%s+(%d+)$"
+                    )
+                end
                 if not next_seed then
                     next_seed = message:match(
                         "^%[anotherdoor_next_battle%]%s+(%d+)$"
@@ -990,6 +1585,15 @@ function Mod:installNetworkHook()
                 end
                 if next_seed then
                     if Mod:isPartyHostPacket(data, data.uuid) then
+                        if mizzle_secret ~= nil then
+                            Mod:setMizzleSecret(mizzle_secret == "1", false)
+                        end
+                        if double_effect ~= nil then
+                            Mod:setDoubleEffectBattles(
+                                tonumber(double_effect) or 0,
+                                false
+                            )
+                        end
                         Mod:setNextBattleSeed(next_seed)
                     end
                     -- Control messages are never forwarded to GCSN's chat UI.
@@ -1011,6 +1615,10 @@ end
 function Mod:init()
     self:installNetworkHook()
     self.enemy_pools = nil
+    self.event_pool = nil
+    self.intro_ready = {}
+    self.intro_highlights = {}
+    self.world_text_ready = {}
     print("Loaded " .. self.info.name .. "!")
 
     Game:registerEvent("mouseholeentry", function(data)
@@ -1019,6 +1627,14 @@ function Mod:init()
 
     Game:registerEvent("nextscreen", function(data)
         return nextscreen(data.x, data.y, { data.width, data.height })
+    end)
+
+    Game:registerEvent("rune_rounds", function(data)
+        return rune_rounds(
+            data.x,
+            data.y,
+            {data.width, data.height}
+        )
     end)
 
     Game:registerEvent("climbshooter", function(data)
@@ -1063,5 +1679,7 @@ function Mod:update()
         if not self:isRoundActive() and not self.round_reset_pending then
             self:areAllRoundPlayersInactive()
         end
+        self:updateDoubleEffectWorldMusic()
+        self:startPendingPostBattleEvent()
     end
 end

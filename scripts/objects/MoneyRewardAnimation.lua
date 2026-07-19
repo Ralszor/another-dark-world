@@ -117,7 +117,7 @@ function MoneyRewardAnimation:getPartyData()
     local health = member and member:getHealth() or 0
     local maximum = member and member:getStat("health") or 1
     local tension = member and member.tension or {value = 0, max = 100}
-    local party_number = math.max(1, math.floor(tonumber(Mod:getLocalPartyNumber()) or 1))
+    local party_number = math.max(1, math.floor(tonumber((Mod:getLocalPartyNumber())) or 1))
     return member, health, maximum, tension, SOUL_COLORS[party_number] or COLORS.red
 end
 

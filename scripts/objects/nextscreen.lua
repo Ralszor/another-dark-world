@@ -18,6 +18,7 @@ function nextscreen:refreshPhases()
 
     local phases = Mod:getPhaseQueue()
     self.phase_signature = table.concat(phases, ":")
+        .. ":" .. (Mod:isMizzleSecretActive() and "normal" or "normal")
 
     local scale = 2
     local icon_width = 24 * scale
@@ -32,7 +33,17 @@ function nextscreen:refreshPhases()
         local columns = math.min(3, remaining)
         local row_width = (columns * icon_width) + ((columns - 1) * gap)
         local start_x = (self.width - row_width) / 2
-        local path = "ui/" .. rarity
+        local icon_names = {
+            common = "monster",
+            uncommon = "monster",
+            rare = "monster",
+            event_enemy = "monster",
+            event = "event",
+        }
+        local enemy_id = Mod:pickEnemyForPhase(index, nil)
+        local path = enemy_id == "miss_mizzle"
+            and "ui/mizzle"
+            or "ui/" .. (icon_names[rarity] or rarity)
         local sprite = Sprite(
             path,
             start_x + (index_in_row * (icon_width + gap)),
@@ -50,6 +61,7 @@ function nextscreen:update()
     Mod:installNetworkHook()
     Mod:syncNextBattleFlag()
     local signature = table.concat(Mod:getPhaseQueue(), ":")
+        .. ":" .. (Mod:isMizzleSecretActive() and "normal" or "normal")
     if signature ~= self.phase_signature then
         self:refreshPhases()
     end

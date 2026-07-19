@@ -25,6 +25,16 @@ Token.DEFINITIONS = {
         texture = "lovers_R",
         description = "When both sides pick the same card, heal 3 HP. If the other side cashes out or leaves, take 100 damage.",
     },
+    unveil = {
+        name = "Final Prophecy Unveils",
+        texture = "unveil",
+        description = "If you hold this token, you can see everybody else's TP.",
+    },
+    equip = {
+        name = "Equip",
+        texture = "equip",
+        description = "Each time you take damage, you receive 10% of it as TP.",
+    },
 }
 
 function Token:init(battle, member_key, token_id, color)

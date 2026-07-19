@@ -5,7 +5,7 @@ function Dummy:init()
 
     -- Enemy name
     self.name = "IMAGE_FRIEND"
-    self.rarity = "event"
+    self.rarity = "event_enemy"
     -- Sets the actor, which handles the enemy's sprites (see scripts/data/actors/dummy.lua)
     self:setActor("friend")
 

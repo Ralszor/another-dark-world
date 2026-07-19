@@ -7,6 +7,8 @@ function Card:init(id, name, effect)
     self.effect = effect
     self.slot = 0
     self.revealed = false
+    -- X-Action cards use this default unless the card defines its own cost.
+    self.tp_cost = 25
 end
 
 function Card:setSlot(slot)

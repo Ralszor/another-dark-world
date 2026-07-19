@@ -1,7 +1,7 @@
 return {
-  version = "1.11",
+  version = "1.10",
   luaversion = "5.1",
-  tiledversion = "1.12.1",
+  tiledversion = "1.10.2",
   class = "",
   orientation = "orthogonal",
   renderorder = "right-down",
@@ -10,7 +10,7 @@ return {
   tilewidth = 40,
   tileheight = 40,
   nextlayerid = 8,
-  nextobjectid = 59,
+  nextobjectid = 60,
   properties = {
     ["name"] = "Test Map - Room 1"
   },
@@ -153,7 +153,6 @@ return {
           width = 520,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -167,7 +166,6 @@ return {
           width = 40,
           height = 80,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -181,7 +179,6 @@ return {
           width = 200,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -195,7 +192,6 @@ return {
           width = 40,
           height = 80,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -209,7 +205,6 @@ return {
           width = 200,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -223,7 +218,6 @@ return {
           width = 120,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -237,7 +231,6 @@ return {
           width = 80,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -251,7 +244,6 @@ return {
           width = 280,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -265,7 +257,6 @@ return {
           width = 40,
           height = 120,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -279,7 +270,6 @@ return {
           width = 520,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -293,7 +283,6 @@ return {
           width = 40,
           height = 200,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -307,7 +296,6 @@ return {
           width = 200,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -321,7 +309,6 @@ return {
           width = 80,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -335,7 +322,6 @@ return {
           width = 120,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -349,7 +335,6 @@ return {
           width = 40,
           height = 240,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -363,7 +348,6 @@ return {
           width = 40,
           height = 240,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -377,7 +361,6 @@ return {
           width = 40,
           height = 240,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -391,7 +374,6 @@ return {
           width = 40,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -405,7 +387,6 @@ return {
           width = 20,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -419,7 +400,6 @@ return {
           width = 40,
           height = 160,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -433,7 +413,6 @@ return {
           width = 160,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -447,7 +426,6 @@ return {
           width = 20,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         }
@@ -477,7 +455,6 @@ return {
           width = 80,
           height = 80,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         }
@@ -507,7 +484,6 @@ return {
           width = 240,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -521,7 +497,6 @@ return {
           width = 40,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -535,7 +510,6 @@ return {
           width = 40,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["exit"] = { id = 49 },
@@ -569,7 +543,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -583,7 +556,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -597,7 +569,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["player_state"] = "CLIMB"
@@ -613,7 +584,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -627,7 +597,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         },
@@ -641,7 +610,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {}
         }
@@ -671,14 +639,10 @@ return {
           width = 40,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["actor"] = "starwalker",
-            ["text"] = {
-              "* These [color:yellow]stairs[color:reset] are [color:yellow]Pissing[color:reset] me off...",
-              "* I'm the original   [color:yellow]Starwalker[color:reset]"
-            }
+            ["text"] = "* The Starwalker watches silently."
           }
         },
         {
@@ -691,13 +655,9 @@ return {
           width = 40,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
-            ["text"] = {
-              "* (Silence echoes in the darkness of this familiar-yet-different scenery.)",
-              "* (The power of avoiding copying official music shines within you.)"
-            }
+            ["text"] = "* The path ahead shines within you."
           }
         },
         {
@@ -710,9 +670,9 @@ return {
           width = 40,
           height = 80,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
+            ["flagcheck"] = "triggered_intro",
             ["map"] = "room2",
             ["marker"] = "entry_left"
           }
@@ -727,7 +687,6 @@ return {
           width = 40,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["cutscene"] = "room1.wall",
@@ -744,7 +703,6 @@ return {
           width = 0,
           height = 0,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["actor"] = "wall",
@@ -762,7 +720,6 @@ return {
           width = 20,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["map"] = "voidclimb",
@@ -779,12 +736,27 @@ return {
           width = 80,
           height = 40,
           rotation = 0,
-          opacity = 1,
           visible = true,
           properties = {
             ["facing"] = "down",
             ["marker"] = { id = 55 },
             ["shop"] = "mousehole"
+          }
+        },
+        {
+          id = 59,
+          name = "script",
+          type = "",
+          shape = "rectangle",
+          x = 800,
+          y = 200,
+          width = 40,
+          height = 80,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["cutscene"] = "go.intro",
+            ["flagcheck"] = "!triggered_intro_complete"
           }
         }
       }

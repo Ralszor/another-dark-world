@@ -9,7 +9,20 @@ function PartyBattler:shouldRefuseFatalDamage(amount)
         and self.chara:getHealth() - amount <= 0
 end
 
+function PartyBattler:grantEquipTension(amount)
+    local damage = tonumber(amount) or 0
+    if Game.party
+        and self.chara == Game.party[1]
+        and Mod:getToken() == "equip"
+        and damage > 0
+        and self.chara.addTension
+    then
+        self.chara:addTension(damage * 0.1)
+    end
+end
+
 function PartyBattler:removeHealth(amount, swoon)
+    self:grantEquipTension(amount)
     if self:shouldRefuseFatalDamage(amount) then
         Mod:useRefusedResurrection()
         Game.battle:startRefusedResurrection(self)
@@ -21,6 +34,7 @@ function PartyBattler:removeHealth(amount, swoon)
 end
 
 function PartyBattler:removeHealthBroken(amount, swoon)
+    self:grantEquipTension(amount)
     if self:shouldRefuseFatalDamage(amount) then
         Mod:useRefusedResurrection()
         Game.battle:startRefusedResurrection(self)
