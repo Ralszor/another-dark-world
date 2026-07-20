@@ -181,8 +181,8 @@ function DarkMenu:startAnotherDoorCashout(amount)
     self.anotherdoor_cashout = {amount = amount, finished = amount <= 0}
     if amount <= 0 then
         Game.money = 0
-        Mod:setRoundActive(false)
-        Mod:startSpectatingNextActive()
+        Mod:setCashedOut(true, false)
+        Mod:syncRoundState(true)
         self.anotherdoor_cashout.round_ended =
             Mod:areAllRoundPlayersInactive(true)
     end
@@ -232,8 +232,7 @@ function DarkMenu:updateAnotherDoorCashout()
     if self.anotherdoor_cash_arrived >= cashout.amount then
         cashout.finished = true
         Game.money = 0
-        Mod:setRoundActive(false)
-        Mod:startSpectatingNextActive()
+        Mod:setCashedOut(true, false)
         Mod:syncRoundState(true)
         cashout.round_ended = Mod:areAllRoundPlayersInactive(true)
     end

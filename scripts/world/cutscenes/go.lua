@@ -164,6 +164,7 @@ return {
         Mod:runPendingPostBattleEvent(cutscene)
     end,
     cashout = function(cutscene)
+        if Mod:hasCashedOut() then return end
         local menu = DarkMenu()
         Game.world:openMenu(menu)
         local cashout = menu:startAnotherDoorCashout(Mod:getLocalMoney())
@@ -192,9 +193,8 @@ return {
 
             cutscene:wait(function() return snapshot:isDone() end)
         else
-            cutscene:wait(function()
-                return Game.world.menu ~= menu
-            end)
+            Game.world:closeMenu()
+            cutscene:wait(function() return Game.world.menu ~= menu end)
         end
     end
 }

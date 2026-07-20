@@ -1,17 +1,12 @@
 return {
-    double_effect = function(cutscene, battle_seed, duration)
-        duration = math.max(2, math.floor(tonumber(duration) or 2))
+    double_effect = function(cutscene, battle_seed)
         cutscene:textAll(
-            "* [color:red]DOUBLE EFFECT[color:reset] will affect the next "
-                .. tostring(duration)
-                .. " battles.",
+            "* [color:yellow]DOUBLE EFFECT[color:reset] will affect the next battle.",
             nil,
             nil,
             {
                 sync_id = "double_effect_"
                     .. tostring(battle_seed)
-                    .. "_"
-                    .. tostring(duration),
             }
         )
     end,

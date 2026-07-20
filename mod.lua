@@ -1,5 +1,5 @@
 local EVENT_PHASE_CHANCE = 15
-local PHASE_POOL_VERSION = 3
+local PHASE_POOL_VERSION = 6
 local ENEMY_RARITY_WEIGHTS = {
     {rarity = "common", weight = 65},
     {rarity = "uncommon", weight = 15},
@@ -26,6 +26,9 @@ local BITE_STATUS_FLAG = "anotherdoor_bite_status"
 local POISON_STATUS_FLAG = "anotherdoor_poison_status"
 local MIZZLE_SECRET_FLAG = "another_door_mizzle_secret"
 local DOUBLE_EFFECT_FLAG = "another_door_double_effect"
+local CASHED_OUT_FLAG = "another_door_cashed_out"
+local TOKEN_EVENT_COMPLETED_ROUND_FLAG =
+    "another_door_token_event_completed_round"
 local DOUBLE_EFFECT_MUSIC = "event_double"
 local DOUBLE_EFFECT_WORLD_VOLUME = 0.5
 local MAX_PHASES = 6
@@ -302,6 +305,17 @@ function Mod:isRoundActive()
     return Game:getFlag(ROUND_ACTIVE_FLAG, true) ~= false
 end
 
+function Mod:hasCashedOut()
+    return Game:getFlag(CASHED_OUT_FLAG, false) == true
+end
+
+function Mod:setCashedOut(cashed_out, sync)
+    cashed_out = cashed_out == true
+    Game:setFlag(CASHED_OUT_FLAG, cashed_out)
+    if sync ~= false then self:syncRoundState(true) end
+    return cashed_out
+end
+
 function Mod:addRound(amount, sync)
     amount = math.max(0, math.floor(tonumber(amount) or 1))
     local round = self:getRound() + amount
@@ -379,6 +393,7 @@ function Mod:resetRound(broadcast)
     local next_round = self.round_reset_target or (self:getRound() + 1)
     self:setRound(next_round, false)
     Game:setFlag(ROUND_ACTIVE_FLAG, true)
+    Game:setFlag(CASHED_OUT_FLAG, false)
     Game:setFlag(TOKEN_FLAG, "heart")
     Game:setFlag(REFUSED_USED_FLAG, false)
     Game:setFlag(BITE_STATUS_FLAG, 0)
@@ -455,6 +470,8 @@ function Mod:receiveRoundState(data)
         bite = math.max(0, math.floor(tonumber(data.bite) or previous.bite or 0)),
         poison = math.max(0, math.floor(tonumber(data.poison) or previous.poison or 0)),
         token = tostring(data.token or previous.token or "heart"),
+        cashed_out = data.cashed_out == true
+            or tonumber(data.cashed_out) == 1,
     }
     local player = gcsn and gcsn.other_players
         and (gcsn.other_players[data.uuid] or gcsn.other_players[key])
@@ -466,7 +483,7 @@ function Mod:receiveRoundState(data)
             player.alpha = target_alpha
         end
     end
-    if not self:isRoundActive() then
+    if not self:isRoundActive() or self:hasCashedOut() then
         self:areAllRoundPlayersInactive()
     end
 end
@@ -498,17 +515,18 @@ function Mod:syncRoundState(force)
             tostring(bite),
             tostring(poison),
             tostring(self:getToken()),
+            self:hasCashedOut() and "1" or "0",
         }, " "),
     })
 end
 
 function Mod:areAllRoundPlayersInactive(defer_completion)
-    if self:isRoundActive() then return false end
+    if self:isRoundActive() and not self:hasCashedOut() then return false end
     local gcsn = rawget(_G, "GCSN")
     for uuid in pairs(gcsn and gcsn.party_members or {}) do
         local state = self.remote_round_states
             and self.remote_round_states[tostring(uuid)]
-        if not state or state.active then
+        if not state or (state.active and not state.cashed_out) then
             return false
         end
     end
@@ -793,7 +811,7 @@ function Mod:getDoubleEffectBattles()
     local remaining = Game:getFlag(DOUBLE_EFFECT_FLAG, 0)
     -- Migrate saves made while this flag was a boolean.
     if remaining == true then return 1 end
-    return math.max(0, math.floor(tonumber(remaining) or 0))
+    return (tonumber(remaining) or 0) > 0 and 1 or 0
 end
 
 function Mod:isDoubleEffectActive()
@@ -801,7 +819,7 @@ function Mod:isDoubleEffectActive()
 end
 
 function Mod:setDoubleEffectBattles(remaining, sync)
-    remaining = math.max(0, math.floor(tonumber(remaining) or 0))
+    remaining = (tonumber(remaining) or 0) > 0 and 1 or 0
     Game:setFlag(DOUBLE_EFFECT_FLAG, remaining)
     if sync ~= false then self:syncNextBattleFlag(true) end
     return remaining
@@ -832,8 +850,7 @@ function Mod:preparePostBattleEvent(seed, completed_double_effect, allow_roll)
     local event_id = self:pickPostBattleEvent(seed)
     if event_id == "double_effect" then
         seed = math.max(1, math.floor(tonumber(seed) or 1))
-        local duration_roll = (seed * SEED_MULTIPLIER) % SEED_MODULUS
-        local duration = 2 + (math.floor(duration_roll / 100) % 4)
+        local duration = 1
         self:setDoubleEffectBattles(duration, false)
         self.pending_post_battle_event = {
             id = event_id,
@@ -1015,22 +1032,51 @@ function Mod:getRarityForRoll(phase_roll, enemy_roll)
     return "common"
 end
 
+function Mod:getRandomEventIDs()
+    local ids = {}
+    for id in pairs(self:getEventPool()) do
+        if id ~= "token_selection" then table.insert(ids, id) end
+    end
+    table.sort(ids)
+    return ids
+end
+
 function Mod:createBattleFromSeed(seed)
     seed = math.max(1, math.floor(tonumber(seed) or 1) % SEED_MODULUS)
     local phase_count = (seed % MAX_PHASES) + 1
     local phases = {}
+    local event_ids = {}
+    local random_event_ids = self:getRandomEventIDs()
     local phase_seed = seed
     for index = 1, phase_count do
         phase_seed = (phase_seed * SEED_MULTIPLIER) % SEED_MODULUS
-        phases[index] = self:getRarityForRoll(
-            (phase_seed % 100) + 1,
-            (math.floor(phase_seed / 100) % 100) + 1
-        )
+        local phase_roll = (phase_seed % 100) + 1
+        local enemy_roll = (math.floor(phase_seed / 100) % 100) + 1
+        local rarity = self:getRarityForRoll(phase_roll, enemy_roll)
+        if rarity == "event" then
+            if #random_event_ids > 0 then
+                event_ids[index] =
+                    random_event_ids[(phase_seed % #random_event_ids) + 1]
+            else
+                -- Token Selection is scheduled once per round, not randomly.
+                rarity = self:getRarityForRoll(100, enemy_roll)
+            end
+        end
+        phases[index] = rarity
+    end
+
+    local completed_round = tonumber(
+        Game:getFlag(TOKEN_EVENT_COMPLETED_ROUND_FLAG, 0)
+    ) or 0
+    if self:getRound() > 1 and completed_round ~= self:getRound() then
+        phases[1] = "event"
+        event_ids[1] = "token_selection"
     end
 
     local next_battle = {
         seed = seed,
         phases = phases,
+        event_ids = event_ids,
         pool_version = PHASE_POOL_VERSION,
     }
     Game:setFlag(NEXT_BATTLE_FLAG, next_battle)
@@ -1155,8 +1201,10 @@ function Mod:pickEnemyForPhase(index, fallback, next_battle)
     next_battle = next_battle or self:getNextBattle()
     index = math.max(1, math.floor(tonumber(index) or 1))
     local rarity = next_battle.phases[index] or "common"
-    -- Event phases use an inert anchor, never an enemy from a rarity pool.
-    if rarity == "event" then return "event_anchor" end
+    if rarity == "event" then
+        local event = self:pickEventForPhase(index, next_battle)
+        return event and event.enemy or "event_anchor"
+    end
     local seed = self:getPhaseSeed(next_battle.seed, index)
     local enemy_id = self:pickEnemyForRarity(rarity, fallback, seed)
     if self:isMizzleSecretActive() and enemy_id == "watercooler" then
@@ -1188,12 +1236,20 @@ end
 
 function Mod:pickEventForPhase(index, next_battle)
     next_battle = next_battle or self:getNextBattle()
+    local fixed_id = next_battle.event_ids and next_battle.event_ids[index]
+    if fixed_id then return self:getEventPool()[fixed_id] end
     local events, ids = self:getEventPool(), {}
-    for id in pairs(events) do table.insert(ids, id) end
+    for id in pairs(events) do
+        if id ~= "token_selection" then table.insert(ids, id) end
+    end
     table.sort(ids)
     if #ids == 0 then return nil end
     local seed = self:getPhaseSeed(next_battle.seed, index)
     return events[ids[(seed % #ids) + 1]]
+end
+
+function Mod:markTokenEventComplete()
+    Game:setFlag(TOKEN_EVENT_COMPLETED_ROUND_FLAG, self:getRound())
 end
 
 function Mod:processNetworkPlayer(player, uuid)
@@ -1217,6 +1273,7 @@ function Mod:processNetworkPlayer(player, uuid)
             uuid = uuid,
             total = player.anotherdoor_round_total,
             active = player.anotherdoor_round_active,
+            cashed_out = player.anotherdoor_cashed_out,
             actor_id = player.anotherdoor_round_actor or player.actor,
             party_number = player.party_number,
             money = player.anotherdoor_money,
@@ -1305,6 +1362,7 @@ function Mod:installNetworkHook()
             message.anotherdoor_round_total = Mod:getRoundTotal()
             message.anotherdoor_round_number = Mod:getRound()
             message.anotherdoor_round_active = Mod:isRoundActive() and 1 or 0
+            message.anotherdoor_cashed_out = Mod:hasCashedOut() and 1 or 0
             message.anotherdoor_round_actor = party and party.id
             message.anotherdoor_token = Mod:getToken()
         end
@@ -1526,9 +1584,17 @@ function Mod:installNetworkHook()
                 local round_total, round_active, round_money,
                     round_health, round_max_health, round_tension,
                     round_tension_max, round_bite, round_poison,
-                    round_token = message:match(
-                    "^%[anotherdoor_round%]%s+(%d+)%s+([01])%s+(%d+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+(%d+)%s+(%d+)%s+(%S+)$"
+                    round_token, round_cashed_out = message:match(
+                    "^%[anotherdoor_round%]%s+(%d+)%s+([01])%s+(%d+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+(%d+)%s+(%d+)%s+(%S+)%s+([01])$"
                 )
+                if not round_total then
+                    round_total, round_active, round_money,
+                        round_health, round_max_health, round_tension,
+                        round_tension_max, round_bite, round_poison,
+                        round_token = message:match(
+                        "^%[anotherdoor_round%]%s+(%d+)%s+([01])%s+(%d+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+(%d+)%s+(%d+)%s+(%S+)$"
+                    )
+                end
                 if not round_total then
                     round_total, round_active, round_money,
                         round_health, round_max_health, round_tension,
@@ -1554,6 +1620,7 @@ function Mod:installNetworkHook()
                         bite = round_bite,
                         poison = round_poison,
                         token = round_token,
+                        cashed_out = round_cashed_out,
                     })
                     return
                 end
@@ -1676,7 +1743,9 @@ function Mod:update()
             self:broadcastRoundReset()
             if not Game.battle then self:completeRoundReset() end
         end
-        if not self:isRoundActive() and not self.round_reset_pending then
+        if (not self:isRoundActive() or self:hasCashedOut())
+            and not self.round_reset_pending
+        then
             self:areAllRoundPlayersInactive()
         end
         self:updateDoubleEffectWorldMusic()

@@ -138,6 +138,7 @@ function Battle:init()
     local next_battle = Mod:getNextBattle()
     self.card_battle_seed = next_battle.seed
     self.card_phase_rarities = next_battle.phases
+    self.card_phase_event_ids = next_battle.event_ids or {}
     self.card_phase_total = #next_battle.phases
     self.double_effect_active = Mod:isDoubleEffectActive()
     self.card_phase_current = 0
@@ -390,6 +391,7 @@ function Battle:replacePhaseEnemy(phase_index)
     local next_enemy_id = Mod:pickEnemyForPhase(phase_index, fallback, {
         seed = self.card_battle_seed,
         phases = self.card_phase_rarities,
+        event_ids = self.card_phase_event_ids,
     })
     if not next_enemy_id then return end
 
@@ -779,7 +781,13 @@ function Battle:closeAllText(serial)
 end
 
 function Battle:isTokenEventPhase()
-    return self.card_phase_rarities[self.card_round] == "event"
+    if self.card_phase_rarities[self.card_round] ~= "event" then return false end
+    local event = Mod:pickEventForPhase(self.card_round, {
+        seed = self.card_battle_seed,
+        phases = self.card_phase_rarities,
+        event_ids = self.card_phase_event_ids,
+    })
+    return event and event.id == "token_selection"
 end
 
 function Battle:beginTokenSelectionEvent()
@@ -802,6 +810,7 @@ function Battle:beginTokenSelectionEvent()
     self.current_battle_event = Mod:pickEventForPhase(self.card_round, {
         seed = self.card_battle_seed,
         phases = self.card_phase_rarities,
+        event_ids = self.card_phase_event_ids,
     })
     self.card_enemy_alpha, self.card_cards_alpha = 0, 0
     self.event_viewport_alpha = 0
@@ -994,6 +1003,7 @@ function Battle:hasEveryEventTokenSelection()
 end
 
 function Battle:endTokenSelectionEvent()
+    Mod:markTokenEventComplete()
     if self.token_selection_object then self.token_selection_object.finished = true end
     self.card_phase = "EVENT_FADE_OUT"
 end
@@ -1574,6 +1584,7 @@ function Battle:resolveCardEffects()
         * CARD_PLAYER_RESOLVE_DELAY
     self.card_resolution_end = math.max(0, active_count - 1)
         * CARD_PLAYER_RESOLVE_DELAY
+    self.card_resolution_visual_played = false
     if active_rank == 0 then
         self.card_effect_resolved = true
     end
@@ -1612,6 +1623,14 @@ function Battle:applyLocalCardEffect()
         end
     end
     self:applyLoversMatchHeal()
+end
+
+function Battle:updateCardResolutionVisuals()
+    if self.card_resolution_visual_played then return end
+    local enemy = self.enemies and self.enemies[1]
+    if not enemy or not enemy.playOfferingAnimation then return end
+    self.card_resolution_visual_played = true
+    enemy:playOfferingAnimation()
 end
 
 function Battle:hasPendingResurrection()
@@ -1922,6 +1941,7 @@ function Battle:updateCardGame()
         end
     elseif self.card_phase == "RESOLVING" then
         self.card_phase_timer = self.card_phase_timer + DT
+        self:updateCardResolutionVisuals()
         if not self.card_effect_resolved
             and self.card_phase_timer >= self.card_resolution_delay
         then
@@ -2144,10 +2164,10 @@ function Battle:drawNetworkGrid()
 
     love.graphics.setLineWidth(1)
     local back_color = self.double_effect_active
-        and {0.2, 0, 0, 1}
+        and {0.2, 0.15, 0, 1}
         or {0.13, 0, 0.2, 1}
     local front_color = self.double_effect_active
-        and {0.5, 0.02, 0.02, 1}
+        and {0.55, 0.45, 0.02, 1}
         or {0.3, 0, 0.45, 1}
     self:drawHexGridLayer(
         -(time * GRID_BACK_SPEED) + (GRID_HEX_WIDTH / 2),
